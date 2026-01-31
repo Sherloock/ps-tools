@@ -9,7 +9,8 @@ function Size {
     #>
     param ([int]$Depth = 0)
 
-    Get-ChildItem -Depth $Depth -ErrorAction SilentlyContinue | ForEach-Object {
+    $basePath = (Get-Location).Path
+    $items = Get-ChildItem -Depth $Depth -ErrorAction SilentlyContinue | ForEach-Object {
         $itemSize = 0
         if ($_.PSIsContainer) {
             $files = Get-ChildItem -LiteralPath $_.FullName -Recurse -File -ErrorAction SilentlyContinue
@@ -20,18 +21,28 @@ function Size {
 
         if ($null -eq $itemSize) { $itemSize = 0 }
 
+        $parentPath = if ($_.PSIsContainer) { $_.Parent.FullName } else { $_.Directory.FullName }
         [PSCustomObject]@{
             Size    = Get-ReadableSize -Bytes $itemSize
             RawSize = $itemSize
             Path    = $_.FullName
+            Name    = $_.Name
+            Parent  = $parentPath
         }
-    } | Sort-Object RawSize -Descending | Select-Object Size, Path
+    } | Sort-Object RawSize -Descending
+
+    $totalBytes = ($items | Measure-Object -Property RawSize -Sum).Sum
+    if ($Depth -gt 0) {
+        Write-SizeTable -Items $items -GroupByParent -TotalBytes $totalBytes
+    } else {
+        Write-SizeTable -Items $items -TotalBytes $totalBytes
+    }
 }
 
 function Movies {
     <#
     .SYNOPSIS
-        Aggregates content from 3 specific paths and shows a total summary.
+        Aggregates content from configured media paths and shows a grouped summary.
     #>
     $paths = if ($global:Config.MediaPaths) { $global:Config.MediaPaths } else {
         Write-Host "  No media paths configured. Copy config.example.ps1 to config.ps1" -ForegroundColor Yellow
@@ -53,17 +64,99 @@ function Movies {
                 if ($null -eq $itemSize) { $itemSize = 0 }
                 $totalBytes += $itemSize
                 [PSCustomObject]@{
-                    Size = Get-ReadableSize -Bytes $itemSize
+                    Size    = Get-ReadableSize -Bytes $itemSize
                     RawSize = $itemSize
-                    Path = $_.FullName
+                    Path    = $_.FullName
+                    Name    = $_.Name
+                    Parent  = $path
                 }
             }
             $allResults += $results
         }
     }
 
-    $allResults | Sort-Object RawSize -Descending | Select-Object Size, Path
-    Write-Host "`n------------------------------" -ForegroundColor Cyan
-    Write-Host "TOTAL AGGREGATED SIZE: $(Get-ReadableSize -Bytes $totalBytes)" -ForegroundColor Green
-    Write-Host "------------------------------`n" -ForegroundColor Cyan
+    Write-SizeTable -Items $allResults -GroupByParent -TotalBytes $totalBytes
+}
+
+function Write-SizeTable {
+    <#
+    .SYNOPSIS
+        Pretty prints size results, optionally grouped by parent folder.
+    #>
+    param(
+        [array]$Items,
+        [switch]$GroupByParent,
+        [long]$TotalBytes = 0
+    )
+
+    if (-not $Items -or $Items.Count -eq 0) {
+        Write-Host "  No items found." -ForegroundColor DarkGray
+        return
+    }
+
+    # Column widths
+    $sizeWidth = 12
+
+    if ($GroupByParent) {
+        # Group by parent folder, sort groups by total size
+        $groups = $Items | Group-Object Parent | ForEach-Object {
+            $groupTotal = ($_.Group | Measure-Object -Property RawSize -Sum).Sum
+            [PSCustomObject]@{
+                Parent   = $_.Name
+                Items    = $_.Group | Sort-Object RawSize -Descending
+                Total    = $groupTotal
+            }
+        } | Sort-Object Total -Descending
+
+        foreach ($group in $groups) {
+            $groupSize = Get-ReadableSize -Bytes $group.Total
+            Write-Host ""
+            Write-Host ("{0,$sizeWidth}  " -f $groupSize) -NoNewline -ForegroundColor Cyan
+            Write-Host $group.Parent -ForegroundColor Yellow
+
+            foreach ($item in $group.Items) {
+                $sizeColor = Get-SizeColor -Bytes $item.RawSize
+                Write-Host ("{0,$sizeWidth}    " -f $item.Size) -NoNewline -ForegroundColor $sizeColor
+                Write-Host $item.Name -ForegroundColor Gray
+            }
+        }
+
+        if ($TotalBytes -gt 0) {
+            Write-Host ""
+            Write-Host ("-" * 50) -ForegroundColor DarkGray
+            Write-Host ("{0,$sizeWidth}  " -f (Get-ReadableSize -Bytes $TotalBytes)) -NoNewline -ForegroundColor Green
+            Write-Host "TOTAL" -ForegroundColor Green
+        }
+    }
+    else {
+        # Simple list sorted by size
+        $calcTotal = 0
+        foreach ($item in $Items) {
+            $calcTotal += $item.RawSize
+            $sizeColor = Get-SizeColor -Bytes $item.RawSize
+            Write-Host ("{0,$sizeWidth}  " -f $item.Size) -NoNewline -ForegroundColor $sizeColor
+            Write-Host $item.Name -ForegroundColor Gray
+        }
+
+        $finalTotal = if ($TotalBytes -gt 0) { $TotalBytes } else { $calcTotal }
+        Write-Host ""
+        Write-Host ("-" * 50) -ForegroundColor DarkGray
+        Write-Host ("{0,$sizeWidth}  " -f (Get-ReadableSize -Bytes $finalTotal)) -NoNewline -ForegroundColor Green
+        Write-Host "TOTAL" -ForegroundColor Green
+    }
+
+    Write-Host ""
+}
+
+function Get-SizeColor {
+    <#
+    .SYNOPSIS
+        Returns color based on size thresholds.
+    #>
+    param([long]$Bytes)
+
+    if ($Bytes -ge 10GB) { return "Red" }
+    if ($Bytes -ge 1GB)  { return "Yellow" }
+    if ($Bytes -ge 100MB) { return "White" }
+    return "DarkGray"
 }
