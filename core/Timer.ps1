@@ -19,7 +19,7 @@ function timer {
     if ($Time -match '(\d+)h') { $seconds += [int]$matches[1] * 3600 }
     if ($Time -match '(\d+)m') { $seconds += [int]$matches[1] * 60 }
     if ($Time -match '(\d+)s') { $seconds += [int]$matches[1] }
-    
+
     # Handle pure numbers as seconds (e.g., '90')
     if ($Time -match '^\d+$') { $seconds = [int]$Time }
 
@@ -38,24 +38,24 @@ function timer {
         while ($seconds -gt 0) {
             $diff = $endTime - (Get-Date)
             $seconds = [int]$diff.TotalSeconds
-            
+
             if ($seconds -lt 0) { break }
 
             # Format the remaining time: HH:mm:ss
             $display = "{0:D2}:{1:D2}:{2:D2}" -f $diff.Hours, $diff.Minutes, $diff.Seconds
-            
+
             # Use `r to overwrite the same line
             Write-Host "`r[ COUNTDOWN: $display ] " -NoNewline -ForegroundColor Yellow
             Start-Sleep -Seconds 1
         }
-        
+
         # 3. Time's up alert
         Write-Host "`r[ COUNTDOWN: 00:00:00 ] " -ForegroundColor Red
         [console]::beep(440, 500)
         Write-Host "`n`n*******************************" -ForegroundColor Green
         Write-Host " $Message" -ForegroundColor White -BackgroundColor DarkGreen
         Write-Host "*******************************`n"
-        
+
         # Optional: Pop up a Windows message box
         $wshell = New-Object -ComObject WScript.Shell
         $wshell.Popup($Message, 0, "Timer Finished", 0x40) | Out-Null
@@ -101,7 +101,7 @@ function timer-bg {
         [console]::beep(440,500)
         (New-Object -ComObject WScript.Shell).Popup($m, 0, "Background Timer", 64)
     } -ArgumentList $Time, $Msg
-    
+
     Write-Host "Timer for $Time running in background..." -ForegroundColor Cyan
 }
 

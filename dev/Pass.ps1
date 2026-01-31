@@ -33,7 +33,7 @@ function Pass {
     Write-Host ("-" * 20)
     Write-Host $Password -ForegroundColor Green
     Write-Host ("-" * 20)
-    
+
     $Password | clip
     Write-Host "Result copied to clipboard!`n" -ForegroundColor Gray
 }
