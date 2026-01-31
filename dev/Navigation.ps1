@@ -20,7 +20,7 @@ function Go {
     }
 
     # If no target or invalid target, show the "Menu"
-    if (-not $Target -or -not $Bookmarks.ContainsKey($Target)) {
+    if (-not $Target -or -not $Bookmarks.Contains($Target)) {
         Write-Host "`n--- GO BOOKMARKS ---" -ForegroundColor Cyan
         $Bookmarks.GetEnumerator() | Sort-Object Name | ForEach-Object {
             Write-Host (" {0,-10}" -f $_.Name) -ForegroundColor Yellow -NoNewline
