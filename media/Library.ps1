@@ -33,7 +33,10 @@ function Movies {
     .SYNOPSIS
         Aggregates content from 3 specific paths and shows a total summary.
     #>
-    $paths = @("F:\_movies", "F:\_shows", "F:\_ufc")
+    $paths = if ($global:Config.MediaPaths) { $global:Config.MediaPaths } else {
+        Write-Host "  No media paths configured. Copy config.example.ps1 to config.ps1" -ForegroundColor Yellow
+        return
+    }
     $allResults = @()
     $totalBytes = 0
 

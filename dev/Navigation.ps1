@@ -9,15 +9,14 @@ function Go {
     #>
     param($Target)
 
-    # Define your shortcuts here (Key = alias, Value = path)
-    $Bookmarks = [ordered]@{
-        "c"       = "C:\"
-        "f"       = "F:\"
-        "my"      = "F:\Fejlesztes\projects\my"
-        "o42"     = "F:\Fejlesztes\projects\office42"
-        "movies"  = "F:\_movies"
-        "shows"   = "F:\_shows"
-        "ufc"     = "F:\_ufc"
+    # Load bookmarks from config, fallback to basic defaults
+    $Bookmarks = if ($global:Config.Bookmarks) {
+        $global:Config.Bookmarks
+    } else {
+        [ordered]@{
+            "c" = "C:\"
+            "d" = "D:\"
+        }
     }
 
     # If no target or invalid target, show the "Menu"

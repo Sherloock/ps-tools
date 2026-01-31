@@ -1,0 +1,9 @@
+# User config (contains local paths)
+config.ps1
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/

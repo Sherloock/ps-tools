@@ -7,7 +7,7 @@ function ?? {
     #>
     Write-Host "`n--- BALINT'S TOOLBOX ---" -ForegroundColor Cyan
 
-    $ToolKitDir = "f:\Fejlesztes\projects\my\ps-tools"
+    $ToolKitDir = $global:ToolKitDir
 
     # Exclude specific functions by name
     $ExcludedFunctions = @("??")

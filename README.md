@@ -5,6 +5,7 @@ Modular PowerShell environment for Full Stack development and System Management.
 ## Structure
 
 - `loader.ps1`: The loader script (dot-source from your PowerShell Profile).
+- `config.example.ps1`: Example configuration (copy to `config.ps1`).
 - `core/`: Basic system utilities (IP, Disk, Timer, Dashboard).
   - `Helpers.ps1`: Internal helper functions (loaded first, excluded from dashboard).
 - `dev/`: Development tools (Node cleanup, Port kill, Passwords, Navigation).
@@ -12,13 +13,27 @@ Modular PowerShell environment for Full Stack development and System Management.
 
 ## Installation
 
-1. Clone this repo to `f:\Fejlesztes\projects\my\ps-tools`.
+1. Clone this repo anywhere on your system.
 2. Run `Win + R` -> `notepad $PROFILE`.
-3. Add this line to your profile:
+3. Add this line to your profile (adjust path to where you cloned):
    ```powershell
-   . "f:\Fejlesztes\projects\my\ps-tools\loader.ps1"
+   . "C:\path\to\ps-tools\loader.ps1"
    ```
 4. Restart PowerShell or run `. $PROFILE` to reload.
+
+## Configuration
+
+Some functions require user-specific paths. To configure:
+
+1. Copy `config.example.ps1` to `config.ps1`
+2. Edit `config.ps1` with your local paths
+
+**Configurable settings:**
+
+- `MediaPaths` - Array of paths for `Movies` function
+- `Bookmarks` - Hashtable of shortcuts for `Go` function
+
+The `config.ps1` file is gitignored and won't be committed.
 
 ## Usage
 
@@ -48,9 +63,9 @@ Modular PowerShell environment for Full Stack development and System Management.
 - `Pass` - Secure password generator
 - `PortKill` - Kill process by port number
 - `CleanNode` - Find and remove node_modules folders
-- `Go` - Quick navigation bookmarks
+- `Go` - Quick navigation bookmarks (requires config.ps1)
 
 ### Media
 
 - `Size` - List files/folders sorted by size
-- `Movies` - Aggregate video library statistics
+- `Movies` - Aggregate video library statistics (requires config.ps1)
