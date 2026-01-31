@@ -10,7 +10,7 @@ function ?? {
     $ToolKitDir = $global:ToolKitDir
 
     # Exclude specific functions by name
-    $ExcludedFunctions = @("??")
+    $ExcludedFunctions = @("??", "Write-SizeTable", "Get-SizeColor")
 
     # Exclude entire files (relative to toolkit dir, use just filename or path like "core\Helpers.ps1")
     $ExcludedFiles = @(
