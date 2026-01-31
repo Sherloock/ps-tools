@@ -1,0 +1,26 @@
+{
+    "folders": [
+        {
+            "path": "."
+        }
+    ],
+    "settings": {
+        "terminal.integrated.defaultProfile.windows": "PowerShell",
+        "files.associations": {
+            "*.ps1": "powershell"
+        },
+        "powershell.codeFormatting.preset": "OTBS",
+        "powershell.codeFormatting.autoCorrectAliases": true,
+        "powershell.scriptAnalysis.enable": true,
+        "editor.formatOnSave": true,
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "files.encoding": "utf8bom",
+        "files.eol": "\r\n"
+    },
+    "extensions": {
+        "recommendations": [
+            "ms-vscode.powershell"
+        ]
+    }
+}
