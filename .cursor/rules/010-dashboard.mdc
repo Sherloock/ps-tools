@@ -1,6 +1,7 @@
 ---
 description: Dashboard function (??) and help system conventions
 globs: "core/Dashboard.ps1,core/Helpers.ps1"
+alwaysApply: true
 ---
 
 # Dashboard & Help System
@@ -20,10 +21,12 @@ The `??` function is the main dashboard that lists all user-facing functions in 
 Functions and files can be excluded from `??` listing:
 
 **Excluded by function name** (`$ExcludedFunctions`):
+
 - `??` - the dashboard itself
 - `Write-SizeTable`, `Get-SizeColor` - internal display helpers
 
 **Excluded by file** (`$ExcludedFiles`):
+
 - `Helpers.ps1` - contains internal utilities only
 - `Timer.ps1` - has its own help via `timer` command
 
@@ -52,6 +55,7 @@ Without this, the function shows "No description provided."
 ## Module Help Functions
 
 Each feature module with multiple commands should have a help function:
+
 - Type `timer` (without args) → shows timer commands help
 - Type `??` → shows main dashboard
 

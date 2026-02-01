@@ -151,23 +151,36 @@ function Save-TimerData {
     $clean = @()
     foreach ($t in $Timers) {
         if ($t.PSObject.Properties.Name -contains 'Id') {
-            $clean += [PSCustomObject]@{
-                Id              = $t.Id
-                Duration        = $t.Duration
-                Seconds         = [int]$t.Seconds
-                Message         = $t.Message
-                StartTime       = $t.StartTime
-                EndTime         = $t.EndTime
-                RepeatTotal     = [int]$t.RepeatTotal
-                RepeatRemaining = [int]$t.RepeatRemaining
-                CurrentRun      = [int]$t.CurrentRun
-                State           = $t.State
+            $obj = [PSCustomObject]@{
+                Id               = $t.Id
+                Duration         = $t.Duration
+                Seconds          = [int]$t.Seconds
+                Message          = $t.Message
+                StartTime        = $t.StartTime
+                EndTime          = $t.EndTime
+                RepeatTotal      = [int]$t.RepeatTotal
+                RepeatRemaining  = [int]$t.RepeatRemaining
+                CurrentRun       = [int]$t.CurrentRun
+                State            = $t.State
                 RemainingSeconds = if ($t.RemainingSeconds) { [int]$t.RemainingSeconds } else { $null }
+                IsSequence       = if ($t.IsSequence) { $true } else { $false }
             }
+            
+            # Add sequence-specific fields if present
+            if ($t.IsSequence) {
+                $obj | Add-Member -NotePropertyName 'SequencePattern' -NotePropertyValue $t.SequencePattern
+                $obj | Add-Member -NotePropertyName 'Phases' -NotePropertyValue $t.Phases
+                $obj | Add-Member -NotePropertyName 'CurrentPhase' -NotePropertyValue ([int]$t.CurrentPhase)
+                $obj | Add-Member -NotePropertyName 'TotalPhases' -NotePropertyValue ([int]$t.TotalPhases)
+                $obj | Add-Member -NotePropertyName 'PhaseLabel' -NotePropertyValue $t.PhaseLabel
+                $obj | Add-Member -NotePropertyName 'TotalSeconds' -NotePropertyValue ([int]$t.TotalSeconds)
+            }
+            
+            $clean += $obj
         }
     }
 
-    ConvertTo-Json -InputObject $clean -Depth 3 | Set-Content -LiteralPath $script:TimerDataFile -Force
+    ConvertTo-Json -InputObject $clean -Depth 10 | Set-Content -LiteralPath $script:TimerDataFile -Force
 }
 
 function Format-Duration {
@@ -259,7 +272,7 @@ function Show-MenuPicker {
     .PARAMETER Title
         Title to display above the menu.
     .PARAMETER Options
-        Array of options. Each option should have 'Id', 'Label', and optionally 'Color'.
+        Array of options. Each option should have 'Id', 'Label', and optionally 'Color' and 'Description'.
     .PARAMETER AllowCancel
         If true, Escape key cancels (returns $null).
     .RETURNS
@@ -326,6 +339,10 @@ function Show-MenuPicker {
                 if ($isSelected) {
                     # Selected: cyan selector with inverted colors (cyan bg, black text)
                     [void]$sb.AppendLine("$($c.Cyan)  $selector $($c.Reset)$($c.InvertCyan)$($opt.Label)$($c.Reset)")
+                    # Show description for selected item (if present)
+                    if ($opt.Description) {
+                        [void]$sb.AppendLine("      $($c.Dim)$($opt.Description)$($c.Reset)")
+                    }
                 }
                 else {
                     [void]$sb.AppendLine("    ${baseColorCode}$($opt.Label)$($c.Reset)")
@@ -396,54 +413,114 @@ function Start-TimerJob {
     # Build the notification script that runs when timer fires
     # This script is self-contained and runs independently of the terminal
     $script = @"
-`$timerId = $($Timer.Id)
+`$timerId = '$($Timer.Id)'
 `$message = '$($Timer.Message -replace "'", "''")'
 `$duration = '$($Timer.Duration)'
 `$repeatTotal = $($Timer.RepeatTotal)
 `$currentRun = $($Timer.CurrentRun)
 `$timerSeconds = $($Timer.Seconds)
 `$dataFile = '$dataFile'
+`$logFile = "`$env:TEMP\PSTimer_`$timerId.log"
 
-# Beep notification
-[console]::beep(440, 500)
+try {
+    # Beep notification
+    [console]::beep(440, 500)
 
-# Update timer data FIRST (before popup, so tl shows correct state)
-if (Test-Path -LiteralPath `$dataFile) {
-    `$jsonContent = Get-Content -LiteralPath `$dataFile -Raw -ErrorAction SilentlyContinue
-    `$parsed = `$jsonContent | ConvertFrom-Json
-    `$timers = New-Object System.Collections.ArrayList
-    `$parsed | ForEach-Object { [void]`$timers.Add(`$_) }
-    `$timer = `$timers | Where-Object { `$_.Id -eq `$timerId }
-    if (`$timer) {
-        if (`$timer.RepeatRemaining -gt 0) {
-            # More repeats to go - schedule next run
-            `$timer.RepeatRemaining = `$timer.RepeatRemaining - 1
-            `$timer.CurrentRun = `$timer.RepeatTotal - `$timer.RepeatRemaining
-            `$timer.StartTime = (Get-Date).ToString('o')
-            `$timer.EndTime = (Get-Date).AddSeconds(`$timerSeconds).ToString('o')
-            `$timer.State = 'Running'
-            
-            # Schedule next run
-            `$nextTrigger = (Get-Date).AddSeconds(`$timerSeconds)
-            `$nextAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"`$env:TEMP\PSTimer_`$timerId.ps1`""
-            `$nextTriggerObj = New-ScheduledTaskTrigger -Once -At `$nextTrigger
-            `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-            Unregister-ScheduledTask -TaskName "PSTimer_`$timerId" -Confirm:`$false -ErrorAction SilentlyContinue
-            Register-ScheduledTask -TaskName "PSTimer_`$timerId" -Action `$nextAction -Trigger `$nextTriggerObj -Settings `$settings -Force | Out-Null
+    # Update timer data FIRST (before popup, so tl shows correct state)
+    if (Test-Path -LiteralPath `$dataFile) {
+        `$jsonContent = Get-Content -LiteralPath `$dataFile -Raw -ErrorAction Stop
+        `$parsed = `$jsonContent | ConvertFrom-Json
+        
+        # Ensure we have an array
+        `$timers = @()
+        if (`$parsed -is [array]) {
+            `$timers = @(`$parsed)
         } else {
-            # All done
-            `$timer.State = 'Completed'
-            Unregister-ScheduledTask -TaskName "PSTimer_`$timerId" -Confirm:`$false -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath "`$env:TEMP\PSTimer_`$timerId.ps1" -Force -ErrorAction SilentlyContinue
+            `$timers = @(`$parsed)
         }
-        ConvertTo-Json -InputObject `$timers -Depth 10 | Set-Content -LiteralPath `$dataFile -Force
+        
+        # Find timer by ID (compare as strings)
+        `$timerIndex = -1
+        for (`$i = 0; `$i -lt `$timers.Count; `$i++) {
+            if ([string]`$timers[`$i].Id -eq [string]`$timerId) {
+                `$timerIndex = `$i
+                break
+            }
+        }
+        
+        if (`$timerIndex -ge 0) {
+            `$timer = `$timers[`$timerIndex]
+            `$repeatRemaining = [int]`$timer.RepeatRemaining
+            
+            if (`$repeatRemaining -gt 0) {
+                # More repeats to go - schedule next run
+                `$newRepeatRemaining = `$repeatRemaining - 1
+                `$newCurrentRun = [int]`$timer.RepeatTotal - `$newRepeatRemaining
+                `$newStart = (Get-Date).ToString('o')
+                `$newEnd = (Get-Date).AddSeconds(`$timerSeconds).ToString('o')
+                
+                # Create updated timer object
+                `$updatedTimer = [PSCustomObject]@{
+                    Id              = `$timer.Id
+                    Duration        = `$timer.Duration
+                    Seconds         = [int]`$timer.Seconds
+                    Message         = `$timer.Message
+                    StartTime       = `$newStart
+                    EndTime         = `$newEnd
+                    RepeatTotal     = [int]`$timer.RepeatTotal
+                    RepeatRemaining = `$newRepeatRemaining
+                    CurrentRun      = `$newCurrentRun
+                    State           = 'Running'
+                    RemainingSeconds = `$null
+                }
+                `$timers[`$timerIndex] = `$updatedTimer
+                
+                # Save BEFORE scheduling next task
+                ConvertTo-Json -InputObject `$timers -Depth 10 | Set-Content -LiteralPath `$dataFile -Force
+                
+                # Schedule next run
+                `$nextTrigger = (Get-Date).AddSeconds(`$timerSeconds)
+                `$scriptPath = "`$env:TEMP\PSTimer_`$timerId.ps1"
+                `$nextAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File ```"`$scriptPath```""
+                `$nextTriggerObj = New-ScheduledTaskTrigger -Once -At `$nextTrigger
+                `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+                
+                Unregister-ScheduledTask -TaskName "PSTimer_`$timerId" -Confirm:`$false -ErrorAction SilentlyContinue
+                Register-ScheduledTask -TaskName "PSTimer_`$timerId" -Action `$nextAction -Trigger `$nextTriggerObj -Settings `$settings -Force | Out-Null
+                
+                `$currentRun = `$newCurrentRun
+            } else {
+                # All done - create completed timer
+                `$updatedTimer = [PSCustomObject]@{
+                    Id              = `$timer.Id
+                    Duration        = `$timer.Duration
+                    Seconds         = [int]`$timer.Seconds
+                    Message         = `$timer.Message
+                    StartTime       = `$timer.StartTime
+                    EndTime         = `$timer.EndTime
+                    RepeatTotal     = [int]`$timer.RepeatTotal
+                    RepeatRemaining = 0
+                    CurrentRun      = [int]`$timer.RepeatTotal
+                    State           = 'Completed'
+                    RemainingSeconds = `$null
+                }
+                `$timers[`$timerIndex] = `$updatedTimer
+                
+                ConvertTo-Json -InputObject `$timers -Depth 10 | Set-Content -LiteralPath `$dataFile -Force
+                
+                Unregister-ScheduledTask -TaskName "PSTimer_`$timerId" -Confirm:`$false -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath "`$env:TEMP\PSTimer_`$timerId.ps1" -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
+} catch {
+    # Log error for debugging
+    "`$(Get-Date -Format 'o') ERROR: `$(`$_.Exception.Message)" | Add-Content -LiteralPath `$logFile -Force
 }
 
 # Show popup (after state update, so it can block without affecting tl display)
-`$startStr = '$((Get-Date).ToString('HH:mm:ss'))'
 `$endStr = (Get-Date).ToString('HH:mm:ss')
-`$body = @("Timer #`$timerId completed!", "", "Duration: `$duration", "Started:  `$startStr", "Finished: `$endStr")
+`$body = @("Timer #`$timerId completed!", "", "Duration: `$duration", "Finished: `$endStr")
 if (`$repeatTotal -gt 1) { `$body += "Run:      `$currentRun of `$repeatTotal" }
 `$popup = New-Object -ComObject WScript.Shell
 `$popup.Popup((`$body -join [char]10), 0, `$message, 64) | Out-Null

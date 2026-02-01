@@ -21,4 +21,30 @@ $global:Config = @{
         "docs"    = "$env:USERPROFILE\Documents"
         "proj"    = "D:\Projects"
     }
+
+    # Timer sequence presets
+    # Syntax: (duration label, duration label)xN, duration label
+    # Use with: t <preset-name> or tpre for interactive picker
+    TimerPresets = @{
+        'pomodoro' = @{
+            Pattern     = "(25m work, 5m rest)x4, 20m 'long break'"
+            Description = "Classic Pomodoro: 4 cycles of 25m work + 5m rest, then 20m break"
+        }
+        'pomodoro-short' = @{
+            Pattern     = "(25m work, 5m rest)x2"
+            Description = "Quick Pomodoro: 2 cycles of 25m work + 5m rest"
+        }
+        'pomodoro-long' = @{
+            Pattern     = "(50m work, 10m rest)x3, 30m 'long break'"
+            Description = "Extended focus: 3 cycles of 50m work + 10m rest, then 30m break"
+        }
+        '52-17' = @{
+            Pattern     = "(52m focus, 17m break)x3"
+            Description = "Science-backed: 52m focus + 17m break ratio"
+        }
+        '90-20' = @{
+            Pattern     = "(90m deep, 20m rest)x2"
+            Description = "Ultradian rhythm: 90m deep work + 20m rest"
+        }
+    }
 }

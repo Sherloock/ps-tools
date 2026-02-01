@@ -333,3 +333,151 @@ Describe "Get-TruncatedMessage" {
         $result.Length | Should -Be 20
     }
 }
+
+# ============================================================================
+# TIMERHELPERS.PS1 - Sequence Parser
+# ============================================================================
+
+Describe "Test-TimerSequence" {
+    It "returns true for pattern with parentheses" {
+        Test-TimerSequence -Pattern "(25m work, 5m rest)x4" | Should -BeTrue
+    }
+
+    It "returns true for pattern with comma" {
+        Test-TimerSequence -Pattern "25m work, 5m rest" | Should -BeTrue
+    }
+
+    It "returns true for pattern with multiplier" {
+        Test-TimerSequence -Pattern "(25m)x4" | Should -BeTrue
+    }
+
+    It "returns false for simple time" {
+        Test-TimerSequence -Pattern "25m" | Should -BeFalse
+    }
+
+    It "returns false for time with label (no comma)" {
+        # "25m work" without comma is not a sequence, it's simple timer + message
+        Test-TimerSequence -Pattern "25m work" | Should -BeFalse
+    }
+
+    It "returns false for empty string" {
+        Test-TimerSequence -Pattern "" | Should -BeFalse
+    }
+
+    It "returns true for preset name when presets loaded" {
+        # TimerPresets must be accessible in script scope
+        $script:TimerPresets['pomodoro'] | Should -Not -BeNullOrEmpty
+        Test-TimerSequence -Pattern "pomodoro" | Should -BeTrue
+    }
+}
+
+Describe "ConvertFrom-TimerSequence" {
+    It "parses two phases with comma" {
+        $phases = @(ConvertFrom-TimerSequence -Pattern "25m work, 5m rest")
+        $phases.Count | Should -Be 2
+        $phases[0].Label | Should -Be "work"
+        $phases[1].Label | Should -Be "rest"
+        $phases[1].Seconds | Should -Be 300
+    }
+
+    It "parses group with multiplier" {
+        $phases = @(ConvertFrom-TimerSequence -Pattern "(25m work, 5m rest)x4")
+        $phases.Count | Should -Be 8  # 4 cycles x 2 phases
+    }
+
+    It "expands preset name pomodoro" {
+        $phases = @(ConvertFrom-TimerSequence -Pattern "pomodoro")
+        $phases.Count | Should -BeGreaterThan 1
+        # Pomodoro should have work and rest phases
+        ($phases | Where-Object { $_.Label -eq "work" }).Count | Should -BeGreaterThan 0
+    }
+
+    It "parses quoted labels with spaces in sequence" {
+        $phases = @(ConvertFrom-TimerSequence -Pattern "(30m 'long break')x1")
+        $phases.Count | Should -Be 1
+        $phases[0].Label | Should -Be "long break"
+    }
+
+    It "parses nested groups" {
+        $phases = @(ConvertFrom-TimerSequence -Pattern "((25m work, 5m rest)x2)x2")
+        $phases.Count | Should -Be 8  # 2 outer x 2 inner x 2 phases
+    }
+
+    It "parses mixed group and single phase" {
+        $phases = @(ConvertFrom-TimerSequence -Pattern "(25m work, 5m rest)x2, 30m break")
+        $phases.Count | Should -Be 5  # 2 cycles x 2 phases + 1 break
+    }
+
+    It "assigns correct loop metadata" {
+        $phases = @(ConvertFrom-TimerSequence -Pattern "(25m work, 5m rest)x3")
+        # First iteration
+        $phases[0].LoopIteration | Should -Be 1
+        $phases[0].LoopTotal | Should -Be 3
+        # Second iteration
+        $phases[2].LoopIteration | Should -Be 2
+        # Third iteration
+        $phases[4].LoopIteration | Should -Be 3
+    }
+
+    It "handles hours in duration" {
+        $phases = @(ConvertFrom-TimerSequence -Pattern "(1h30m focus)x1")
+        $phases[0].Seconds | Should -Be 5400
+    }
+}
+
+Describe "Get-SequenceSummary" {
+    It "calculates total seconds" {
+        $phases = ConvertFrom-TimerSequence -Pattern "(25m work, 5m rest)x4"
+        $summary = Get-SequenceSummary -Phases $phases
+        $summary.TotalSeconds | Should -Be 7200  # 4 x (25 + 5) = 120 minutes = 7200s
+    }
+
+    It "returns correct phase count" {
+        $phases = ConvertFrom-TimerSequence -Pattern "(25m work, 5m rest)x4"
+        $summary = Get-SequenceSummary -Phases $phases
+        $summary.PhaseCount | Should -Be 8
+    }
+
+    It "formats total duration" {
+        $phases = ConvertFrom-TimerSequence -Pattern "(25m work, 5m rest)x4"
+        $summary = Get-SequenceSummary -Phases $phases
+        $summary.TotalDuration | Should -Be "2h"
+    }
+
+    It "builds description with label counts" {
+        $phases = ConvertFrom-TimerSequence -Pattern "(25m work, 5m rest)x4"
+        $summary = Get-SequenceSummary -Phases $phases
+        $summary.Description | Should -Match "4x work"
+        $summary.Description | Should -Match "4x rest"
+    }
+}
+
+Describe "TimerPresets" {
+    It "contains pomodoro preset" {
+        $script:TimerPresets.ContainsKey('pomodoro') | Should -BeTrue
+    }
+
+    It "contains pomodoro-short preset" {
+        $script:TimerPresets.ContainsKey('pomodoro-short') | Should -BeTrue
+    }
+
+    It "contains pomodoro-long preset" {
+        $script:TimerPresets.ContainsKey('pomodoro-long') | Should -BeTrue
+    }
+
+    It "contains 52-17 preset" {
+        $script:TimerPresets.ContainsKey('52-17') | Should -BeTrue
+    }
+
+    It "contains 90-20 preset" {
+        $script:TimerPresets.ContainsKey('90-20') | Should -BeTrue
+    }
+
+    It "preset has Pattern property" {
+        $script:TimerPresets['pomodoro'].Pattern | Should -Not -BeNullOrEmpty
+    }
+
+    It "preset has Description property" {
+        $script:TimerPresets['pomodoro'].Description | Should -Not -BeNullOrEmpty
+    }
+}

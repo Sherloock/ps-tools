@@ -54,12 +54,27 @@ The `config.ps1` file is gitignored and won't be committed.
 
 ### Timer (type `t` for help)
 
-- `t <time> [-m msg] [-r N]` - Start a background timer with optional repeat
+- `t <time> [-m msg] [-r N]` - Start a timer (simple or sequence)
+- `tpre` - Pick from preset sequences (Pomodoro, etc.)
 - `tl [-a] [-w]` - List active timers (-a all, -w watch) with progress
 - `tw [id]` - Watch timer with progress bar (picker if no id)
 - `tp [id|all]` - Pause timer (picker if no id)
 - `tr [id|all]` - Resume paused timer (picker if no id)
 - `td [id|done|all]` - Remove timer (picker if no id)
+
+**Sequence Timers (Pomodoro-style)**
+
+```powershell
+# Use a preset
+t pomodoro                    # Classic: 4x(25m work + 5m rest) + 20m break
+
+# Custom sequence syntax: (duration label, duration label)xN
+t "(25m work, 5m rest)x4"                      # 4 work/rest cycles
+t "(50m focus, 10m break)x3, 30m 'long break'" # 3 cycles + long break
+t "((25m work, 5m rest)x4, 20m break)x2"       # Nested: 2 full pomodoro sets
+```
+
+**Presets:** `pomodoro`, `pomodoro-short`, `pomodoro-long`, `52-17`, `90-20`
 
 ### Dev
 

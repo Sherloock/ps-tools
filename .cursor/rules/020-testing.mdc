@@ -1,6 +1,7 @@
 ---
 description: Testing standards and requirements for all code changes
 globs: "**/*.ps1,tests/**"
+alwaysApply: true
 ---
 
 # Testing Standards
@@ -35,15 +36,15 @@ globs: "**/*.ps1,tests/**"
 
 Tests live in `tests/` folder with this structure:
 
-| Test File | Covers |
-|-----------|--------|
-| `Core.Tests.ps1` | `Helpers.ps1`, `TimerHelpers.ps1` (pure functions) |
-| `Timer.Tests.ps1` | `Timer.ps1` (with mocked scheduled tasks) |
-| `System.Tests.ps1` | `System.ps1` (ShowIP, DiskSpace) |
-| `DevTools.Tests.ps1` | `DevTools.ps1` (PortKill, NodeKill) |
-| `Navigation.Tests.ps1` | `Navigation.ps1` (Go function) |
-| `Pass.Tests.ps1` | `Pass.ps1` (password generation) |
-| `Media.Tests.ps1` | `Library.ps1` (Size, Movies) |
+| Test File              | Covers                                             |
+| ---------------------- | -------------------------------------------------- |
+| `Core.Tests.ps1`       | `Helpers.ps1`, `TimerHelpers.ps1` (pure functions) |
+| `Timer.Tests.ps1`      | `Timer.ps1` (with mocked scheduled tasks)          |
+| `System.Tests.ps1`     | `System.ps1` (ShowIP, DiskSpace)                   |
+| `DevTools.Tests.ps1`   | `DevTools.ps1` (PortKill, NodeKill)                |
+| `Navigation.Tests.ps1` | `Navigation.ps1` (Go function)                     |
+| `Pass.Tests.ps1`       | `Pass.ps1` (password generation)                   |
+| `Media.Tests.ps1`      | `Library.ps1` (Size, Movies)                       |
 
 ## Number Formatting Standards
 
@@ -66,10 +67,10 @@ Describe "FunctionName" {
     It "does X when Y" {
         # Arrange
         $input = "test"
-        
+
         # Act
         $result = FunctionName -Param $input
-        
+
         # Assert
         $result | Should -Be "expected"
     }

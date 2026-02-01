@@ -17,7 +17,11 @@ function Show-TimerHelp {
     Write-Host "  " -NoNewline
     Write-Host "t <time>" -ForegroundColor Yellow -NoNewline
     Write-Host " [msg] [repeat]" -ForegroundColor Gray
-    Write-Host "      Start a background timer with optional message & repeat" -ForegroundColor DarkGray
+    Write-Host "      Start a timer (simple or sequence pattern)" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  " -NoNewline
+    Write-Host "tpre" -ForegroundColor Yellow
+    Write-Host "      Pick from preset sequences (Pomodoro, etc.)" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "  " -NoNewline
     Write-Host "tl" -ForegroundColor Yellow -NoNewline
@@ -47,17 +51,29 @@ function Show-TimerHelp {
     Write-Host "  Time formats: " -ForegroundColor DarkGray -NoNewline
     Write-Host "1h30m, 25m, 90s, 1h20m30s" -ForegroundColor White
     Write-Host ""
-    Write-Host "  Examples:" -ForegroundColor DarkGray
+    Write-Host "  Simple examples:" -ForegroundColor DarkGray
     Write-Host "    t 25m                      " -ForegroundColor Gray -NoNewline
-    Write-Host "# Simple 25 min timer" -ForegroundColor DarkGray
+    Write-Host "# 25 min timer" -ForegroundColor DarkGray
     Write-Host "    t 30m Water                " -ForegroundColor Gray -NoNewline
-    Write-Host "# Hydration reminder" -ForegroundColor DarkGray
+    Write-Host "# With message" -ForegroundColor DarkGray
     Write-Host "    t 1h30m 'Stand up' 4       " -ForegroundColor Gray -NoNewline
-    Write-Host "# Repeat 4 times" -ForegroundColor DarkGray
-    Write-Host "    t 45m -m 'Meeting' -r 2    " -ForegroundColor Gray -NoNewline
-    Write-Host "# Named params" -ForegroundColor DarkGray
-    Write-Host "    t 8h Lunch                 " -ForegroundColor Gray -NoNewline
-    Write-Host "# End of workday" -ForegroundColor DarkGray
+    Write-Host "# Repeat 4x" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  SEQUENCE TIMERS" -ForegroundColor Cyan
+    Write-Host "  ---------------" -ForegroundColor DarkCyan
+    Write-Host ""
+    Write-Host "  Syntax: " -ForegroundColor DarkGray -NoNewline
+    Write-Host "(duration label, duration label)xN" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  Sequence examples:" -ForegroundColor DarkGray
+    Write-Host "    t pomodoro                 " -ForegroundColor Gray -NoNewline
+    Write-Host "# Use preset" -ForegroundColor DarkGray
+    Write-Host "    t ""(25m work, 5m rest)x4"" " -ForegroundColor Gray -NoNewline
+    Write-Host "# 4 cycles" -ForegroundColor DarkGray
+    Write-Host "    t ""(50m focus, 10m break)x3, 30m 'long break'""" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  Presets: " -ForegroundColor DarkGray -NoNewline
+    Write-Host "pomodoro, pomodoro-short, pomodoro-long, 52-17, 90-20" -ForegroundColor White
     Write-Host ""
 }
 
@@ -70,16 +86,18 @@ function Timer {
     .SYNOPSIS
         Starts a background timer with optional repeat. Use tl to view all timers.
     .PARAMETER Time
-        The duration (e.g., 1h20m, 90s, 10m, 3h). Omit to see help.
+        Duration (e.g., 1h20m, 90s), sequence pattern (e.g., "(25m work, 5m rest)x4"),
+        or preset name (e.g., "pomodoro"). Omit to see help.
     .PARAMETER Message
-        Optional message to show when time is up.
+        Optional message to show when time is up (ignored for sequences).
     .PARAMETER Repeat
         Number of times to repeat the timer (e.g., -r 3 repeats 3 times total).
     .EXAMPLE
         t 25m
         t 30m Water
         t 1h30m 'Stand up' 4
-        t 45m -m 'Meeting' -r 2
+        t pomodoro
+        t "(25m work, 5m rest)x4"
     #>
     param(
         [Parameter(Position=0)][string]$Time,
@@ -93,6 +111,13 @@ function Timer {
         return
     }
 
+    # Check if this is a sequence pattern or preset
+    if (Test-TimerSequence -Pattern $Time) {
+        Start-SequenceTimer -Pattern $Time
+        return
+    }
+
+    # Simple timer mode
     $seconds = ConvertTo-Seconds -Time $Time
 
     if ($seconds -le 0) {
@@ -119,6 +144,7 @@ function Timer {
         RepeatRemaining = $Repeat - 1
         CurrentRun      = 1
         State           = 'Running'
+        IsSequence      = $false
     }
 
     # Save to data file
@@ -143,6 +169,107 @@ function Timer {
     }
     Write-Host "  Message:  " -ForegroundColor Gray -NoNewline
     Write-Host $Message -ForegroundColor White
+    Write-Host ""
+}
+
+function Start-SequenceTimer {
+    <#
+    .SYNOPSIS
+        Starts a sequence-based timer (Pomodoro-style).
+    .PARAMETER Pattern
+        Sequence pattern string or preset name.
+    #>
+    param([string]$Pattern)
+
+    # Resolve preset name to pattern
+    $originalPattern = $Pattern
+    if ($script:TimerPresets.ContainsKey($Pattern)) {
+        $presetInfo = $script:TimerPresets[$Pattern]
+        $Pattern = $presetInfo.Pattern
+    }
+
+    # Parse the sequence
+    try {
+        $phases = @(ConvertFrom-TimerSequence -Pattern $Pattern)
+    }
+    catch {
+        Write-Host "`n  Invalid sequence pattern: $Pattern" -ForegroundColor Red
+        Write-Host "  Example: (25m work, 5m rest)x4, 30m break`n" -ForegroundColor DarkGray
+        return
+    }
+
+    if ($phases.Count -eq 0) {
+        Write-Host "`n  No phases found in pattern: $Pattern" -ForegroundColor Red
+        return
+    }
+
+    $summary = Get-SequenceSummary -Phases $phases
+
+    # Generate unique ID
+    $id = New-TimerId
+    $now = Get-Date
+    
+    # First phase
+    $firstPhase = $phases[0]
+    $endTime = $now.AddSeconds($firstPhase.Seconds)
+
+    # Convert phases to JSON-safe array
+    $phasesData = @()
+    foreach ($p in $phases) {
+        $phasesData += @{
+            Seconds       = $p.Seconds
+            Label         = $p.Label
+            Duration      = $p.Duration
+            LoopId        = $p.LoopId
+            LoopIteration = $p.LoopIteration
+            LoopTotal     = $p.LoopTotal
+        }
+    }
+
+    # Create sequence timer metadata
+    $timer = [PSCustomObject]@{
+        Id              = $id
+        Duration        = $summary.TotalDuration
+        Seconds         = $firstPhase.Seconds
+        Message         = $firstPhase.Label
+        StartTime       = $now.ToString('o')
+        EndTime         = $endTime.ToString('o')
+        RepeatTotal     = 1
+        RepeatRemaining = 0
+        CurrentRun      = 1
+        State           = 'Running'
+        IsSequence      = $true
+        SequencePattern = $originalPattern
+        Phases          = $phasesData
+        CurrentPhase    = 0
+        TotalPhases     = $phases.Count
+        PhaseLabel      = $firstPhase.Label
+        TotalSeconds    = $summary.TotalSeconds
+    }
+
+    # Save to data file
+    $timers = @(Get-TimerData)
+    $timers += $timer
+    Save-TimerData -Timers $timers
+
+    # Start the job for first phase
+    Start-SequenceTimerJob -Timer $timer
+
+    # Display confirmation
+    Write-Host ""
+    Write-Host "  Sequence started " -ForegroundColor Green -NoNewline
+    Write-Host "[$id]" -ForegroundColor Cyan
+    Write-Host "  Pattern:  " -ForegroundColor Gray -NoNewline
+    Write-Host $originalPattern -ForegroundColor White
+    Write-Host "  Total:    " -ForegroundColor Gray -NoNewline
+    Write-Host "$($summary.TotalDuration) ($($phases.Count) phases)" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Current phase:" -ForegroundColor DarkGray
+    Write-Host "  [1/$($phases.Count)] " -ForegroundColor Magenta -NoNewline
+    Write-Host "$($firstPhase.Label)" -ForegroundColor Cyan -NoNewline
+    Write-Host " - $(Format-Duration -Seconds $firstPhase.Seconds)" -ForegroundColor White
+    Write-Host "  Ends at:  " -ForegroundColor Gray -NoNewline
+    Write-Host $endTime.ToString('HH:mm:ss') -ForegroundColor Yellow
     Write-Host ""
 }
 
@@ -218,7 +345,7 @@ function Show-TimerListOnce {
     $colRemaining = 11
     $colProgress = 8
     $colEndsAt = 10
-    $colRepeat = 8
+    $colPhase = 8
 
     # Header
     Write-Host "  " -NoNewline
@@ -228,7 +355,7 @@ function Show-TimerListOnce {
     Write-Host ("{0,-$colRemaining}" -f "REMAINING") -ForegroundColor DarkGray -NoNewline
     Write-Host ("{0,-$colProgress}" -f "PROG") -ForegroundColor DarkGray -NoNewline
     Write-Host ("{0,-$colEndsAt}" -f "ENDS AT") -ForegroundColor DarkGray -NoNewline
-    Write-Host ("{0,-$colRepeat}" -f "REPEAT") -ForegroundColor DarkGray -NoNewline
+    Write-Host ("{0,-$colPhase}" -f "PHASE") -ForegroundColor DarkGray -NoNewline
     Write-Host "MESSAGE" -ForegroundColor DarkGray
     Write-Host ("  " + ("-" * 83)) -ForegroundColor DarkGray
 
@@ -243,14 +370,29 @@ function Show-TimerListOnce {
         # State color
         $stateColor = Get-TimerStateColor -State $t.State
 
-        # Repeat info
-        $repeatStr = if ($t.RepeatTotal -gt 1) { "$($t.CurrentRun)/$($t.RepeatTotal)" } else { "-" }
+        # Repeat/Phase info - show phase progress for sequences
+        if ($t.IsSequence) {
+            $phaseNum = [int]$t.CurrentPhase + 1
+            $repeatStr = "$phaseNum/$($t.TotalPhases)"
+        }
+        elseif ($t.RepeatTotal -gt 1) {
+            $repeatStr = "$($t.CurrentRun)/$($t.RepeatTotal)"
+        }
+        else {
+            $repeatStr = "-"
+        }
 
-        # Truncate message
-        $msgDisplay = Get-TruncatedMessage -Message $t.Message -MaxLength 20
+        # Message - for sequences show phase label
+        $msgSource = if ($t.IsSequence) { $t.PhaseLabel } else { $t.Message }
+        $msgDisplay = Get-TruncatedMessage -Message $msgSource -MaxLength 20
 
-        # Duration formatted
-        $durationStr = Format-Duration -Seconds $t.Seconds
+        # Duration formatted - for sequences show total duration
+        if ($t.IsSequence) {
+            $durationStr = Format-Duration -Seconds $t.TotalSeconds
+        }
+        else {
+            $durationStr = Format-Duration -Seconds $t.Seconds
+        }
 
         # Calculate progress percentage
         $percent = Get-TimerProgress -Timer $t
@@ -294,7 +436,9 @@ function Show-TimerListOnce {
             Write-Host ("{0,-$colEndsAt}" -f "-") -ForegroundColor DarkGray -NoNewline
         }
 
-        Write-Host ("{0,-$colRepeat}" -f $repeatStr) -ForegroundColor Magenta -NoNewline
+        # Use different color for sequence phase indicator
+        $phaseColor = if ($t.IsSequence) { 'Cyan' } else { 'Magenta' }
+        Write-Host ("{0,-$colPhase}" -f $repeatStr) -ForegroundColor $phaseColor -NoNewline
         Write-Host $msgDisplay -ForegroundColor Gray
     }
 
@@ -377,10 +521,10 @@ function Show-TimerListWatch {
             [void]$sb.AppendLine("")
 
             # Column widths
-            $colId = 5; $colState = 10; $colDuration = 11; $colRemaining = 11; $colProgress = 8; $colEndsAt = 10; $colRepeat = 8
+            $colId = 5; $colState = 10; $colDuration = 11; $colRemaining = 11; $colProgress = 8; $colEndsAt = 10; $colPhase = 8
 
             # Header
-            $hdr = "  {0,-$colId}{1,-$colState}{2,-$colDuration}{3,-$colRemaining}{4,-$colProgress}{5,-$colEndsAt}{6,-$colRepeat}MESSAGE" -f "ID", "STATE", "DURATION", "REMAINING", "PROG", "ENDS AT", "REPEAT"
+            $hdr = "  {0,-$colId}{1,-$colState}{2,-$colDuration}{3,-$colRemaining}{4,-$colProgress}{5,-$colEndsAt}{6,-$colPhase}MESSAGE" -f "ID", "STATE", "DURATION", "REMAINING", "PROG", "ENDS AT", "PHASE"
             [void]$sb.AppendLine("$($c.Gray)$hdr$($c.Reset)")
             [void]$sb.AppendLine("$($c.Gray)  $("-" * 83)$($c.Reset)")
 
@@ -390,9 +534,33 @@ function Show-TimerListWatch {
 
                 $remainingStr = Format-RemainingTime -Remaining $remaining
                 $stateColor = Get-TimerStateColor -State $t.State -Ansi
-                $repeatStr = if ($t.RepeatTotal -gt 1) { "$($t.CurrentRun)/$($t.RepeatTotal)" } else { "-" }
-                $msgDisplay = Get-TruncatedMessage -Message $t.Message -MaxLength 20
-                $durationStr = Format-Duration -Seconds $t.Seconds
+                
+                # Phase/repeat info - show phase progress for sequences
+                if ($t.IsSequence) {
+                    $phaseNum = [int]$t.CurrentPhase + 1
+                    $phaseStr = "$phaseNum/$($t.TotalPhases)"
+                    $phaseColor = $c.Cyan
+                }
+                elseif ($t.RepeatTotal -gt 1) {
+                    $phaseStr = "$($t.CurrentRun)/$($t.RepeatTotal)"
+                    $phaseColor = $c.Magenta
+                }
+                else {
+                    $phaseStr = "-"
+                    $phaseColor = $c.Magenta
+                }
+                
+                # Message - for sequences show phase label
+                $msgSource = if ($t.IsSequence) { $t.PhaseLabel } else { $t.Message }
+                $msgDisplay = Get-TruncatedMessage -Message $msgSource -MaxLength 20
+                
+                # Duration - for sequences show total duration
+                if ($t.IsSequence) {
+                    $durationStr = Format-Duration -Seconds $t.TotalSeconds
+                }
+                else {
+                    $durationStr = Format-Duration -Seconds $t.Seconds
+                }
 
                 # Calculate progress percentage
                 $percent = Get-TimerProgress -Timer $t
@@ -413,7 +581,7 @@ function Show-TimerListWatch {
                     $endsAtStr = "-"
                 }
 
-                $line = "  $($c.Cyan){0,-$colId}$($c.Reset)${stateColor}{1,-$colState}$($c.Reset)$($c.White){2,-$colDuration}$($c.Reset)$($c.Yellow){3,-$colRemaining}$($c.Reset)$($c.Green){4,-$colProgress}$($c.Reset)$($c.Green){5,-$colEndsAt}$($c.Reset)$($c.Magenta){6,-$colRepeat}$($c.Reset)$($c.Gray){7}$($c.Reset)" -f $t.Id, $t.State, $durationStr, $remainingStr, $progressStr, $endsAtStr, $repeatStr, $msgDisplay
+                $line = "  $($c.Cyan){0,-$colId}$($c.Reset)${stateColor}{1,-$colState}$($c.Reset)$($c.White){2,-$colDuration}$($c.Reset)$($c.Yellow){3,-$colRemaining}$($c.Reset)$($c.Green){4,-$colProgress}$($c.Reset)$($c.Green){5,-$colEndsAt}$($c.Reset)${phaseColor}{6,-$colPhase}$($c.Reset)$($c.Gray){7}$($c.Reset)" -f $t.Id, $t.State, $durationStr, $remainingStr, $progressStr, $endsAtStr, $phaseStr, $msgDisplay
                 [void]$sb.AppendLine($line)
             }
 
@@ -450,6 +618,63 @@ Set-Alias -Name tw -Value TimerWatch -Scope Global
 Set-Alias -Name tp -Value TimerPause -Scope Global
 Set-Alias -Name tr -Value TimerResume -Scope Global
 Set-Alias -Name td -Value TimerRemove -Scope Global
+Set-Alias -Name tpre -Value TimerPresets -Scope Global
+
+function TimerPresets {
+    <#
+    .SYNOPSIS
+        Shows interactive preset picker for common timer sequences.
+    .DESCRIPTION
+        Displays available timer presets like Pomodoro, 52-17, etc.
+        Select a preset to start the timer sequence immediately.
+    .EXAMPLE
+        tpre
+    #>
+    
+    # Build options from presets
+    $options = @()
+    foreach ($name in $script:TimerPresets.Keys | Sort-Object) {
+        $preset = $script:TimerPresets[$name]
+        $phases = ConvertFrom-TimerSequence -Pattern $preset.Pattern
+        $summary = Get-SequenceSummary -Phases $phases
+        
+        $options += @{
+            Id          = $name
+            Label       = "$name - $($summary.TotalDuration) total ($($summary.PhaseCount) phases)"
+            Description = $preset.Description
+            Color       = 'White'
+        }
+    }
+    
+    # Add custom option
+    $options += @{
+        Id    = '_custom'
+        Label = "[Enter custom sequence...]"
+        Color = 'Cyan'
+    }
+    
+    $selectedId = Show-MenuPicker -Title "SELECT TIMER PRESET" -Options $options -AllowCancel
+    
+    if (-not $selectedId) {
+        return
+    }
+    
+    if ($selectedId -eq '_custom') {
+        Write-Host ""
+        Write-Host "  Enter sequence pattern:" -ForegroundColor Cyan
+        Write-Host "  Example: (25m work, 5m rest)x4, 30m break" -ForegroundColor DarkGray
+        Write-Host ""
+        $pattern = Read-Host "  Pattern"
+        if ([string]::IsNullOrWhiteSpace($pattern)) {
+            return
+        }
+        Timer -Time $pattern
+    }
+    else {
+        # Start the preset
+        Timer -Time $selectedId
+    }
+}
 
 function TimerWatch {
     <#
@@ -588,20 +813,38 @@ function Show-TimerWatchDisplay {
             $sb = [System.Text.StringBuilder]::new()
 
             [void]$sb.AppendLine("")
-            [void]$sb.AppendLine("$($c.Cyan)$($c.Bold)  TIMER WATCH $($c.White)[$($Timer.Id)]$($c.Reset)")
-            [void]$sb.AppendLine("$($c.Cyan)  ===================$($c.Reset)")
-            [void]$sb.AppendLine("")
-            [void]$sb.AppendLine("$($c.Gray)  Message:  $($c.White)$($Timer.Message)$($c.Reset)")
-            [void]$sb.AppendLine("$($c.Gray)  Duration: $($c.White)$(Format-Duration -Seconds $totalSeconds)$($c.Reset)")
-            [void]$sb.AppendLine("$($c.Gray)  Ends at:  $($c.Yellow)$($endTime.ToString('HH:mm:ss'))$($c.Reset)")
+            
+            # Different header for sequences
+            if ($currentTimer.IsSequence) {
+                [void]$sb.AppendLine("$($c.Cyan)$($c.Bold)  SEQUENCE WATCH $($c.White)[$($Timer.Id)]$($c.Reset)")
+                [void]$sb.AppendLine("$($c.Cyan)  =====================$($c.Reset)")
+                [void]$sb.AppendLine("")
+                
+                $phaseNum = [int]$currentTimer.CurrentPhase + 1
+                $phaseLabel = $currentTimer.PhaseLabel
+                [void]$sb.AppendLine("$($c.Gray)  Pattern:  $($c.White)$($currentTimer.SequencePattern)$($c.Reset)")
+                [void]$sb.AppendLine("$($c.Gray)  Total:    $($c.White)$(Format-Duration -Seconds $currentTimer.TotalSeconds)$($c.Reset)")
+                [void]$sb.AppendLine("")
+                [void]$sb.AppendLine("$($c.Cyan)$($c.Bold)  Phase $phaseNum/$($currentTimer.TotalPhases): $phaseLabel$($c.Reset)")
+                [void]$sb.AppendLine("$($c.Gray)  Duration: $($c.White)$(Format-Duration -Seconds $currentTimer.Seconds)$($c.Reset)")
+                [void]$sb.AppendLine("$($c.Gray)  Ends at:  $($c.Yellow)$($endTime.ToString('HH:mm:ss'))$($c.Reset)")
+            }
+            else {
+                [void]$sb.AppendLine("$($c.Cyan)$($c.Bold)  TIMER WATCH $($c.White)[$($Timer.Id)]$($c.Reset)")
+                [void]$sb.AppendLine("$($c.Cyan)  ===================$($c.Reset)")
+                [void]$sb.AppendLine("")
+                [void]$sb.AppendLine("$($c.Gray)  Message:  $($c.White)$($Timer.Message)$($c.Reset)")
+                [void]$sb.AppendLine("$($c.Gray)  Duration: $($c.White)$(Format-Duration -Seconds $totalSeconds)$($c.Reset)")
+                [void]$sb.AppendLine("$($c.Gray)  Ends at:  $($c.Yellow)$($endTime.ToString('HH:mm:ss'))$($c.Reset)")
 
-            if ($Timer.RepeatTotal -gt 1) {
-                [void]$sb.AppendLine("$($c.Gray)  Repeat:   $($c.White)$($currentTimer.CurrentRun)/$($Timer.RepeatTotal)$($c.Reset)")
+                if ($Timer.RepeatTotal -gt 1) {
+                    [void]$sb.AppendLine("$($c.Gray)  Repeat:   $($c.White)$($currentTimer.CurrentRun)/$($Timer.RepeatTotal)$($c.Reset)")
+                }
             }
 
             [void]$sb.AppendLine("")
 
-            # Progress bar
+            # Progress bar (for current phase)
             $barWidth = 40
             $filledCount = [int][math]::Floor(($percent / 100) * $barWidth)
             $emptyCount = [int]($barWidth - $filledCount)
@@ -615,6 +858,30 @@ function Show-TimerWatchDisplay {
             # Remaining time - large format
             $remainingStr = Format-RemainingTime -Remaining $remaining
             [void]$sb.AppendLine("$($c.Yellow)$($c.Bold)  Remaining: $remainingStr$($c.Reset)")
+            
+            # Show phase timeline for sequences
+            if ($currentTimer.IsSequence -and $currentTimer.Phases) {
+                [void]$sb.AppendLine("")
+                [void]$sb.AppendLine("$($c.DarkCyan)  Phases:$($c.Reset)")
+                $phases = $currentTimer.Phases
+                $maxShow = [math]::Min(6, $phases.Count)
+                $startIdx = [math]::Max(0, [int]$currentTimer.CurrentPhase - 2)
+                $endIdx = [math]::Min($phases.Count - 1, $startIdx + $maxShow - 1)
+                
+                for ($i = $startIdx; $i -le $endIdx; $i++) {
+                    $phase = $phases[$i]
+                    $pNum = $i + 1
+                    $marker = if ($i -eq [int]$currentTimer.CurrentPhase) { "$($c.Cyan)>" } else { " " }
+                    $pColor = if ($i -lt [int]$currentTimer.CurrentPhase) { $c.Dim } elseif ($i -eq [int]$currentTimer.CurrentPhase) { $c.White } else { $c.Gray }
+                    $checkMark = if ($i -lt [int]$currentTimer.CurrentPhase) { "$($c.Green)[OK]" } else { "    " }
+                    [void]$sb.AppendLine("  $marker $checkMark ${pColor}$pNum. $($phase.Label) ($(Format-Duration -Seconds $phase.Seconds))$($c.Reset)")
+                }
+                
+                if ($endIdx -lt $phases.Count - 1) {
+                    [void]$sb.AppendLine("$($c.Dim)    ... $($phases.Count - $endIdx - 1) more phases$($c.Reset)")
+                }
+            }
+            
             [void]$sb.AppendLine("")
             [void]$sb.AppendLine("$($c.Dim)  Press any key to exit watch mode...$($c.Reset)")
 
