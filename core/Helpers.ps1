@@ -2,6 +2,33 @@
 # These are internal utilities - excluded from '??' dashboard
 
 # ============================================================================
+# FILE HELPERS
+# ============================================================================
+
+function Get-FlattenUniqueFileName {
+    <#
+    .SYNOPSIS
+        Generates a unique filename by appending counter if file exists.
+    #>
+    param(
+        [string]$TargetFolder,
+        [string]$FileName
+    )
+
+    $BaseName = [System.IO.Path]::GetFileNameWithoutExtension($FileName)
+    $Extension = [System.IO.Path]::GetExtension($FileName)
+    $NewFileName = $FileName
+    $Counter = 1
+
+    while (Test-Path -LiteralPath (Join-Path -Path $TargetFolder -ChildPath $NewFileName)) {
+        $NewFileName = "$BaseName-$Counter$Extension"
+        $Counter++
+    }
+
+    return $NewFileName
+}
+
+# ============================================================================
 # SIZE HELPERS
 # ============================================================================
 
@@ -165,7 +192,7 @@ function Save-TimerData {
                 RemainingSeconds = if ($t.RemainingSeconds) { [int]$t.RemainingSeconds } else { $null }
                 IsSequence       = if ($t.IsSequence) { $true } else { $false }
             }
-            
+
             # Add sequence-specific fields if present
             if ($t.IsSequence) {
                 $obj | Add-Member -NotePropertyName 'SequencePattern' -NotePropertyValue $t.SequencePattern
@@ -175,7 +202,7 @@ function Save-TimerData {
                 $obj | Add-Member -NotePropertyName 'PhaseLabel' -NotePropertyValue $t.PhaseLabel
                 $obj | Add-Member -NotePropertyName 'TotalSeconds' -NotePropertyValue ([int]$t.TotalSeconds)
             }
-            
+
             $clean += $obj
         }
     }
@@ -215,7 +242,7 @@ function Sync-TimerData {
 
     foreach ($timer in $timers) {
         if ($timer.State -ne 'Running') { continue }
-        
+
         $taskName = "PSTimer_$($timer.Id)"
         $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 
@@ -238,7 +265,7 @@ function Sync-TimerData {
             try {
                 $endTime = [DateTime]::Parse($timer.EndTime)
                 $remaining = [int]($endTime - (Get-Date)).TotalSeconds
-                
+
                 if ($remaining -le 0) {
                     # Timer expired without task - mark as lost
                     $timer.State = 'Lost'
@@ -296,13 +323,13 @@ function Show-MenuPicker {
 
     $selectedIndex = 0
     $optionCount = $Options.Count
-    
+
     # Selection indicator
     $selector = [char]0x25B6  # ▶
-    
+
     # ANSI color codes for flicker-free rendering
     $c = Get-AnsiColors
-    
+
     # Map color names to ANSI codes
     $colorMap = @{
         'White'      = $c.White
@@ -315,27 +342,27 @@ function Show-MenuPicker {
         'DarkGray'   = $c.Dim
         'DarkYellow' = $c.Yellow
     }
-    
+
     [Console]::CursorVisible = $false
-    
+
     try {
         while ($true) {
             # Build entire output in StringBuilder to avoid flicker
             $sb = [System.Text.StringBuilder]::new()
-            
+
             [void]$sb.AppendLine("")
             if ($Title) {
                 [void]$sb.AppendLine("$($c.Cyan)  $Title$($c.Reset)")
                 [void]$sb.AppendLine("$($c.DarkCyan)  $('-' * $Title.Length)$($c.Reset)")
             }
             [void]$sb.AppendLine("")
-            
+
             # Draw options
             for ($i = 0; $i -lt $optionCount; $i++) {
                 $opt = $Options[$i]
                 $isSelected = ($i -eq $selectedIndex)
                 $baseColorCode = if ($opt.Color -and $colorMap[$opt.Color]) { $colorMap[$opt.Color] } else { $c.White }
-                
+
                 if ($isSelected) {
                     # Selected: cyan selector with inverted colors (cyan bg, black text)
                     [void]$sb.AppendLine("$($c.Cyan)  $selector $($c.Reset)$($c.InvertCyan)$($opt.Label)$($c.Reset)")
@@ -348,18 +375,18 @@ function Show-MenuPicker {
                     [void]$sb.AppendLine("    ${baseColorCode}$($opt.Label)$($c.Reset)")
                 }
             }
-            
+
             [void]$sb.AppendLine("")
             $cancelText = if ($AllowCancel) { ", Esc=cancel" } else { "" }
             [void]$sb.AppendLine("$($c.Yellow)  [Up/Down]$($c.Dim) navigate  $($c.Green)[Enter]$($c.Dim) select$cancelText$($c.Reset)")
-            
+
             # Clear and write atomically
             Clear-Host
             [Console]::Write($sb.ToString())
-            
+
             # Wait for keypress
             $key = [Console]::ReadKey($true)
-            
+
             switch ($key.Key) {
                 'UpArrow' {
                     if ($selectedIndex -gt 0) {
@@ -406,10 +433,10 @@ function Start-TimerJob {
 
     $taskName = "PSTimer_$($Timer.Id)"
     $dataFile = Join-Path $env:TEMP "ps-timers.json"
-    
+
     # Calculate trigger time
     $triggerTime = (Get-Date).AddSeconds($Timer.Seconds)
-    
+
     # Build the notification script that runs when timer fires
     # This script is self-contained and runs independently of the terminal
     $script = @"
@@ -430,7 +457,7 @@ try {
     if (Test-Path -LiteralPath `$dataFile) {
         `$jsonContent = Get-Content -LiteralPath `$dataFile -Raw -ErrorAction Stop
         `$parsed = `$jsonContent | ConvertFrom-Json
-        
+
         # Ensure we have an array
         `$timers = @()
         if (`$parsed -is [array]) {
@@ -438,7 +465,7 @@ try {
         } else {
             `$timers = @(`$parsed)
         }
-        
+
         # Find timer by ID (compare as strings)
         `$timerIndex = -1
         for (`$i = 0; `$i -lt `$timers.Count; `$i++) {
@@ -447,18 +474,18 @@ try {
                 break
             }
         }
-        
+
         if (`$timerIndex -ge 0) {
             `$timer = `$timers[`$timerIndex]
             `$repeatRemaining = [int]`$timer.RepeatRemaining
-            
+
             if (`$repeatRemaining -gt 0) {
                 # More repeats to go - schedule next run
                 `$newRepeatRemaining = `$repeatRemaining - 1
                 `$newCurrentRun = [int]`$timer.RepeatTotal - `$newRepeatRemaining
                 `$newStart = (Get-Date).ToString('o')
                 `$newEnd = (Get-Date).AddSeconds(`$timerSeconds).ToString('o')
-                
+
                 # Create updated timer object
                 `$updatedTimer = [PSCustomObject]@{
                     Id              = `$timer.Id
@@ -474,20 +501,20 @@ try {
                     RemainingSeconds = `$null
                 }
                 `$timers[`$timerIndex] = `$updatedTimer
-                
+
                 # Save BEFORE scheduling next task
                 ConvertTo-Json -InputObject `$timers -Depth 10 | Set-Content -LiteralPath `$dataFile -Force
-                
+
                 # Schedule next run
                 `$nextTrigger = (Get-Date).AddSeconds(`$timerSeconds)
                 `$scriptPath = "`$env:TEMP\PSTimer_`$timerId.ps1"
                 `$nextAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File ```"`$scriptPath```""
                 `$nextTriggerObj = New-ScheduledTaskTrigger -Once -At `$nextTrigger
                 `$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-                
+
                 Unregister-ScheduledTask -TaskName "PSTimer_`$timerId" -Confirm:`$false -ErrorAction SilentlyContinue
                 Register-ScheduledTask -TaskName "PSTimer_`$timerId" -Action `$nextAction -Trigger `$nextTriggerObj -Settings `$settings -Force | Out-Null
-                
+
                 `$currentRun = `$newCurrentRun
             } else {
                 # All done - create completed timer
@@ -505,9 +532,9 @@ try {
                     RemainingSeconds = `$null
                 }
                 `$timers[`$timerIndex] = `$updatedTimer
-                
+
                 ConvertTo-Json -InputObject `$timers -Depth 10 | Set-Content -LiteralPath `$dataFile -Force
-                
+
                 Unregister-ScheduledTask -TaskName "PSTimer_`$timerId" -Confirm:`$false -ErrorAction SilentlyContinue
                 Remove-Item -LiteralPath "`$env:TEMP\PSTimer_`$timerId.ps1" -Force -ErrorAction SilentlyContinue
             }
@@ -525,19 +552,19 @@ if (`$repeatTotal -gt 1) { `$body += "Run:      `$currentRun of `$repeatTotal" }
 `$popup = New-Object -ComObject WScript.Shell
 `$popup.Popup((`$body -join [char]10), 0, `$message, 64) | Out-Null
 "@
-    
+
     # Write script to temp file (scheduled tasks work better with script files)
     $scriptPath = Join-Path $env:TEMP "PSTimer_$($Timer.Id).ps1"
     $script | Set-Content -LiteralPath $scriptPath -Force -Encoding UTF8
-    
+
     # Remove any existing task with same name
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-    
+
     # Create scheduled task
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
     $trigger = New-ScheduledTaskTrigger -Once -At $triggerTime
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-    
+
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
 }
 
@@ -547,10 +574,10 @@ function Stop-TimerTask {
         Stops and unregisters a timer's scheduled task.
     #>
     param([int]$TimerId)
-    
+
     $taskName = "PSTimer_$TimerId"
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-    
+
     # Also clean up the script file
     $scriptPath = Join-Path $env:TEMP "PSTimer_$TimerId.ps1"
     Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue

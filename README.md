@@ -6,8 +6,9 @@ Modular PowerShell environment for Full Stack development and System Management.
 
 - `loader.ps1`: The loader script (dot-source from your PowerShell Profile).
 - `config.example.ps1`: Example configuration (copy to `config.ps1`).
-- `core/`: Basic system utilities (IP, Disk, Timer, Dashboard).
+- `core/`: Basic system utilities (IP, Disk, Timer, Dashboard, File operations).
   - `Helpers.ps1`: Internal helper functions (loaded first, excluded from dashboard).
+  - `Files.ps1`: File operation utilities (Flatten).
 - `dev/`: Development tools (Node cleanup, Port kill, Passwords, Navigation).
 - `media/`: Movie and show library management.
 - `tests/`: Pester test suite for all modules.
@@ -52,6 +53,27 @@ The `config.ps1` file is gitignored and won't be committed.
 - `ShowIP` - Network dashboard with local info and public IP lookup
 - `Disk-Space` - Disk usage dashboard with color-coded warnings
 - `Fast` - Internet speed test using Speedtest CLI
+- `Flatten` - Flatten directory structure (move/copy all files from subfolders to one folder)
+
+```powershell
+# Reload toolkit after editing scripts
+Reload
+
+# Network info
+ShowIP                        # Shows local IP, gateway, DNS, public IP, ISP
+
+# Disk usage
+Disk-Space                    # Color-coded: green <70%, yellow 70-90%, red >90%
+
+# Speed test (requires Speedtest CLI)
+Fast
+
+# Flatten directory - move all files from subfolders to root
+Flatten                                           # Interactive mode
+Flatten "C:\Photos" -Move -Force                  # Move files, no prompts
+Flatten "C:\Source" -OutputFolder "C:\Dest" -Copy # Copy to different folder
+flat "C:\Target" -Move -Force                     # Alias
+```
 
 ### Timer (type `t` for help)
 
@@ -84,10 +106,43 @@ t "((25m work, 5m rest)x4, 20m break)x2"       # Nested: 2 full pomodoro sets
 - `NodeKill [path]` - Find and remove node_modules folders (sorted by size, with totals). Accepts path or shortcut from `NodeKillPaths`
 - `Go` - Quick navigation bookmarks (requires config.ps1)
 
+```powershell
+# Password generator
+Pass                          # 24-char alphanumeric (default)
+Pass -Length 32               # Custom length
+Pass -Complex                 # Include symbols (!@#$%^&* etc.)
+Pass 16 -Complex              # 16-char with symbols
+
+# Kill process by port
+PortKill -Port 3000           # Kill whatever is using port 3000
+PortKill 8080                 # Positional parameter
+
+# Clean node_modules (interactive selection)
+NodeKill                      # Scan current directory
+NodeKill "C:\Projects"        # Scan specific path
+NodeKill work                 # Use shortcut from config.ps1
+
+# Navigation bookmarks (configure in config.ps1)
+Go                            # List all bookmarks
+Go home                       # Jump to 'home' bookmark
+Go proj                       # Jump to 'proj' bookmark
+```
+
 ### Media
 
 - `Size` - List files/folders sorted by size
 - `Movies` - Aggregate video library statistics (requires config.ps1)
+
+```powershell
+# Size - list items sorted by size (largest first)
+Size                          # Current directory
+Size "C:\Downloads"           # Specific path
+Size -Recurse                 # Include subdirectory sizes
+Size -MinSize 100MB           # Only show items >= 100MB
+
+# Movies - aggregate stats from configured media paths
+Movies                        # List all movie folders with sizes
+```
 
 ## Testing
 
@@ -116,3 +171,4 @@ Invoke-Pester .\tests\Timer.Tests.ps1
 - `Navigation.Tests.ps1` - Go function
 - `Pass.Tests.ps1` - Password generation
 - `Media.Tests.ps1` - Size, Movies
+- `Files.Tests.ps1` - Flatten directory operations
