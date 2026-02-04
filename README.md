@@ -23,6 +23,35 @@ Modular PowerShell environment for Full Stack development and System Management.
    ```
 4. Restart PowerShell or run `. $PROFILE` to reload.
 
+### Using with WezTerm
+
+So that WezTerm uses PowerShell (and thus loads your profile and this toolkit), set the default program in your WezTerm config.
+
+**Option A – User config (recommended)**
+Edit or create `%USERPROFILE%\.wezterm.lua`:
+
+```lua
+local wezterm = require 'wezterm'
+local config = wezterm.config_builder()
+
+-- Use Windows PowerShell so your $PROFILE and ps-tools loader run
+config.default_prog = { 'powershell.exe', '-NoLogo' }
+
+return config
+```
+
+Use `pwsh.exe` instead of `powershell.exe` if you prefer PowerShell Core. Reload config with `Ctrl+Shift+R` if WezTerm is already open.
+
+**Option B – Project-specific**
+To use this only when opening WezTerm from this repo, set the config file when starting WezTerm (e.g. in a shortcut or Cursor task):
+
+```powershell
+$env:WEZTERM_CONFIG_FILE = "F:\Fejlesztes\projects\my\ps-tools\.wezterm.lua"
+wezterm
+```
+
+Then add `.wezterm.lua` in the project root with the same `default_prog` as above (see `config.example.wezterm.lua` in the repo).
+
 ## Configuration
 
 Some functions require user-specific paths. To configure:

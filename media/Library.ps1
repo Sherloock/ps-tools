@@ -51,6 +51,7 @@ function Movies {
     <#
     .SYNOPSIS
         Aggregates content from configured media paths and shows a grouped summary.
+        Also checks for duplicate files in the downloads folder.
     #>
     $paths = if ($global:Config.MediaPaths) { $global:Config.MediaPaths } else {
         Write-Host "  No media paths configured. Copy config.example.ps1 to config.ps1" -ForegroundColor Yellow
@@ -63,19 +64,31 @@ function Movies {
         if (Test-Path $path) {
             $results = Get-ChildItem -LiteralPath $path -Depth 0 -ErrorAction SilentlyContinue | ForEach-Object {
                 $itemSize = 0
+                $episodeCount = 0
                 if ($_.PSIsContainer) {
-                    $itemSize = (Get-ChildItem -LiteralPath $_.FullName -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum
+                    $files = Get-ChildItem -LiteralPath $_.FullName -Recurse -File -ErrorAction SilentlyContinue
+                    $itemSize = ($files | Measure-Object -Property Length -Sum).Sum
+                    # Count video files (episodes) - common video extensions
+                    $videoExtensions = @('.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.m4v', '.ts', '.m2ts')
+                    $episodeCount = ($files | Where-Object { $videoExtensions -contains $_.Extension.ToLower() }).Count
                 } else {
                     $itemSize = $_.Length
                 }
 
                 if ($null -eq $itemSize) { $itemSize = 0 }
                 $totalBytes += $itemSize
+                
+                # Build name with episode count if > 1
+                $displayName = $_.Name
+                if ($episodeCount -gt 1) {
+                    $displayName = "$($_.Name) [$episodeCount episodes]"
+                }
+                
                 [PSCustomObject]@{
                     Size    = Get-ReadableSize -Bytes $itemSize
                     RawSize = $itemSize
                     Path    = $_.FullName
-                    Name    = $_.Name
+                    Name    = $displayName
                     Parent  = $path
                 }
             }
@@ -84,6 +97,19 @@ function Movies {
     }
 
     Write-SizeTable -Items $allResults -GroupByParent -TotalBytes $totalBytes
+
+    # Run duplicate check
+    $downloadsPath = if ($global:Config.DownloadsPath) { $global:Config.DownloadsPath } else { $null }
+    $minSize = if ($global:Config.DuplicateCheckMinSize) { $global:Config.DuplicateCheckMinSize } else { 100MB }
+
+    if ($downloadsPath -and (Test-Path $downloadsPath)) {
+        $duplicates = Find-DuplicateFiles -DownloadsPath $downloadsPath -MediaPaths $paths -MinSizeBytes $minSize
+        Write-DuplicateReport -Duplicates $duplicates
+    } else {
+        Write-Host "" -ForegroundColor Yellow
+        Write-Host "  Downloads path not configured or does not exist." -ForegroundColor Yellow
+        Write-Host "  Set DownloadsPath in config.ps1 to enable duplicate checking." -ForegroundColor DarkGray
+    }
 }
 
 function Write-SizeTable {

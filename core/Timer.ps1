@@ -181,14 +181,11 @@ function Start-SequenceTimer {
     #>
     param([string]$Pattern)
 
-    # Resolve preset name to pattern
     $originalPattern = $Pattern
     if ($script:TimerPresets.ContainsKey($Pattern)) {
-        $presetInfo = $script:TimerPresets[$Pattern]
-        $Pattern = $presetInfo.Pattern
+        $Pattern = $script:TimerPresets[$Pattern].Pattern
     }
 
-    # Parse the sequence
     try {
         $phases = @(ConvertFrom-TimerSequence -Pattern $Pattern)
     }
@@ -204,73 +201,18 @@ function Start-SequenceTimer {
     }
 
     $summary = Get-SequenceSummary -Phases $phases
-
-    # Generate unique ID
     $id = New-TimerId
     $now = Get-Date
-    
-    # First phase
-    $firstPhase = $phases[0]
-    $endTime = $now.AddSeconds($firstPhase.Seconds)
+    $timer = New-SequenceTimerFromPhases -Id $id -OriginalPattern $originalPattern -Phases $phases -Summary $summary -Now $now
 
-    # Convert phases to JSON-safe array
-    $phasesData = @()
-    foreach ($p in $phases) {
-        $phasesData += @{
-            Seconds       = $p.Seconds
-            Label         = $p.Label
-            Duration      = $p.Duration
-            LoopId        = $p.LoopId
-            LoopIteration = $p.LoopIteration
-            LoopTotal     = $p.LoopTotal
-        }
-    }
-
-    # Create sequence timer metadata
-    $timer = [PSCustomObject]@{
-        Id              = $id
-        Duration        = $summary.TotalDuration
-        Seconds         = $firstPhase.Seconds
-        Message         = $firstPhase.Label
-        StartTime       = $now.ToString('o')
-        EndTime         = $endTime.ToString('o')
-        RepeatTotal     = 1
-        RepeatRemaining = 0
-        CurrentRun      = 1
-        State           = 'Running'
-        IsSequence      = $true
-        SequencePattern = $originalPattern
-        Phases          = $phasesData
-        CurrentPhase    = 0
-        TotalPhases     = $phases.Count
-        PhaseLabel      = $firstPhase.Label
-        TotalSeconds    = $summary.TotalSeconds
-    }
-
-    # Save to data file
     $timers = @(Get-TimerData)
     $timers += $timer
     Save-TimerData -Timers $timers
-
-    # Start the job for first phase
     Start-SequenceTimerJob -Timer $timer
 
-    # Display confirmation
-    Write-Host ""
-    Write-Host "  Sequence started " -ForegroundColor Green -NoNewline
-    Write-Host "[$id]" -ForegroundColor Cyan
-    Write-Host "  Pattern:  " -ForegroundColor Gray -NoNewline
-    Write-Host $originalPattern -ForegroundColor White
-    Write-Host "  Total:    " -ForegroundColor Gray -NoNewline
-    Write-Host "$($summary.TotalDuration) ($($phases.Count) phases)" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "  Current phase:" -ForegroundColor DarkGray
-    Write-Host "  [1/$($phases.Count)] " -ForegroundColor Magenta -NoNewline
-    Write-Host "$($firstPhase.Label)" -ForegroundColor Cyan -NoNewline
-    Write-Host " - $(Format-Duration -Seconds $firstPhase.Seconds)" -ForegroundColor White
-    Write-Host "  Ends at:  " -ForegroundColor Gray -NoNewline
-    Write-Host $endTime.ToString('HH:mm:ss') -ForegroundColor Yellow
-    Write-Host ""
+    $firstPhase = $phases[0]
+    $endTime = $now.AddSeconds($firstPhase.Seconds)
+    Write-SequenceTimerConfirmation -Id $id -OriginalPattern $originalPattern -Summary $summary -PhaseCount $phases.Count -FirstPhase $firstPhase -EndTime $endTime
 }
 
 function TimerList {
@@ -359,87 +301,18 @@ function Show-TimerListOnce {
     Write-Host "MESSAGE" -ForegroundColor DarkGray
     Write-Host ("  " + ("-" * 83)) -ForegroundColor DarkGray
 
+    $now = Get-Date
     foreach ($t in $timers) {
-        $now = Get-Date
-        $endTime = [DateTime]::Parse($t.EndTime)
-
-        # Calculate remaining time
-        $remaining = $endTime - $now
-        $remainingStr = Format-RemainingTime -Remaining $remaining
-
-        # State color
-        $stateColor = Get-TimerStateColor -State $t.State
-
-        # Repeat/Phase info - show phase progress for sequences
-        if ($t.IsSequence) {
-            $phaseNum = [int]$t.CurrentPhase + 1
-            $repeatStr = "$phaseNum/$($t.TotalPhases)"
-        }
-        elseif ($t.RepeatTotal -gt 1) {
-            $repeatStr = "$($t.CurrentRun)/$($t.RepeatTotal)"
-        }
-        else {
-            $repeatStr = "-"
-        }
-
-        # Message - for sequences show phase label
-        $msgSource = if ($t.IsSequence) { $t.PhaseLabel } else { $t.Message }
-        $msgDisplay = Get-TruncatedMessage -Message $msgSource -MaxLength 20
-
-        # Duration formatted - for sequences show total duration
-        if ($t.IsSequence) {
-            $durationStr = Format-Duration -Seconds $t.TotalSeconds
-        }
-        else {
-            $durationStr = Format-Duration -Seconds $t.Seconds
-        }
-
-        # Calculate progress percentage
-        $percent = Get-TimerProgress -Timer $t
-        $progressStr = if ($percent -ge 0) { "{0:N0}%" -f $percent } else { "-" }
-
-        # Calculate remaining and ends at based on state
-        if ($t.State -eq 'Running') {
-            $endsAtStr = $endTime.ToString('HH:mm:ss')
-        }
-        elseif ($t.State -eq 'Paused' -or $t.State -eq 'Lost') {
-            # For paused/lost: show remaining from saved value, calculate projected end time
-            $savedRemaining = if ($t.RemainingSeconds -and $t.RemainingSeconds -gt 0) { $t.RemainingSeconds } else { $t.Seconds }
-            $remainingStr = Format-RemainingTime -Remaining ([TimeSpan]::FromSeconds($savedRemaining))
-            $projectedEnd = (Get-Date).AddSeconds($savedRemaining)
-            $endsAtStr = $projectedEnd.ToString('HH:mm:ss')
-            # Calculate progress for paused/lost
-            $elapsed = $t.Seconds - $savedRemaining
-            $percent = if ($t.Seconds -gt 0) { ($elapsed / $t.Seconds) * 100 } else { 0 }
-            $progressStr = "{0:N0}%" -f $percent
-        }
-        else {
-            $endsAtStr = "-"
-        }
-
-        # Output row
+        $row = Get-TimerListRowDisplayData -Timer $t -Now $now
         Write-Host "  " -NoNewline
         Write-Host ("{0,-$colId}" -f $t.Id) -ForegroundColor Cyan -NoNewline
-        Write-Host ("{0,-$colState}" -f $t.State) -ForegroundColor $stateColor -NoNewline
-        Write-Host ("{0,-$colDuration}" -f $durationStr) -ForegroundColor White -NoNewline
-
-        if ($t.State -eq 'Running' -or $t.State -eq 'Paused' -or $t.State -eq 'Lost') {
-            $remainingColor = if ($t.State -eq 'Running') { 'Yellow' } elseif ($t.State -eq 'Lost') { 'DarkRed' } else { 'DarkYellow' }
-            $endsColor = if ($t.State -eq 'Running') { 'Green' } else { 'DarkGray' }
-            Write-Host ("{0,-$colRemaining}" -f $remainingStr) -ForegroundColor $remainingColor -NoNewline
-            Write-Host ("{0,-$colProgress}" -f $progressStr) -ForegroundColor $remainingColor -NoNewline
-            Write-Host ("{0,-$colEndsAt}" -f $endsAtStr) -ForegroundColor $endsColor -NoNewline
-        }
-        else {
-            Write-Host ("{0,-$colRemaining}" -f "-") -ForegroundColor DarkGray -NoNewline
-            Write-Host ("{0,-$colProgress}" -f $progressStr) -ForegroundColor DarkGray -NoNewline
-            Write-Host ("{0,-$colEndsAt}" -f "-") -ForegroundColor DarkGray -NoNewline
-        }
-
-        # Use different color for sequence phase indicator
-        $phaseColor = if ($t.IsSequence) { 'Cyan' } else { 'Magenta' }
-        Write-Host ("{0,-$colPhase}" -f $repeatStr) -ForegroundColor $phaseColor -NoNewline
-        Write-Host $msgDisplay -ForegroundColor Gray
+        Write-Host ("{0,-$colState}" -f $t.State) -ForegroundColor $row.StateColor -NoNewline
+        Write-Host ("{0,-$colDuration}" -f $row.DurationStr) -ForegroundColor White -NoNewline
+        Write-Host ("{0,-$colRemaining}" -f $row.RemainingStr) -ForegroundColor $row.RemainingColor -NoNewline
+        Write-Host ("{0,-$colProgress}" -f $row.ProgressStr) -ForegroundColor $row.RemainingColor -NoNewline
+        Write-Host ("{0,-$colEndsAt}" -f $row.EndsAtStr) -ForegroundColor $row.EndsColor -NoNewline
+        Write-Host ("{0,-$colPhase}" -f $row.RepeatStr) -ForegroundColor $row.PhaseColor -NoNewline
+        Write-Host $row.MsgDisplay -ForegroundColor Gray
     }
 
     Write-Host ""
@@ -520,89 +393,20 @@ function Show-TimerListWatch {
             [void]$sb.AppendLine("$($c.DarkCyan)  =====================$($c.Reset)")
             [void]$sb.AppendLine("")
 
-            # Column widths
-            $colId = 5; $colState = 10; $colDuration = 11; $colRemaining = 11; $colProgress = 8; $colEndsAt = 10; $colPhase = 8
-
-            # Header
-            $hdr = "  {0,-$colId}{1,-$colState}{2,-$colDuration}{3,-$colRemaining}{4,-$colProgress}{5,-$colEndsAt}{6,-$colPhase}MESSAGE" -f "ID", "STATE", "DURATION", "REMAINING", "PROG", "ENDS AT", "PHASE"
+            $colWidths = @{ Id = 5; State = 10; Duration = 11; Remaining = 11; Progress = 8; EndsAt = 10; Phase = 8 }
+            $hdr = "  {0,-5}{1,-10}{2,-11}{3,-11}{4,-8}{5,-10}{6,-8}MESSAGE" -f "ID", "STATE", "DURATION", "REMAINING", "PROG", "ENDS AT", "PHASE"
             [void]$sb.AppendLine("$($c.Gray)$hdr$($c.Reset)")
             [void]$sb.AppendLine("$($c.Gray)  $("-" * 83)$($c.Reset)")
-
             foreach ($t in $displayTimers) {
-                $endTime = [DateTime]::Parse($t.EndTime)
-                $remaining = $endTime - $now
-
-                $remainingStr = Format-RemainingTime -Remaining $remaining
-                $stateColor = Get-TimerStateColor -State $t.State -Ansi
-                
-                # Phase/repeat info - show phase progress for sequences
-                if ($t.IsSequence) {
-                    $phaseNum = [int]$t.CurrentPhase + 1
-                    $phaseStr = "$phaseNum/$($t.TotalPhases)"
-                    $phaseColor = $c.Cyan
-                }
-                elseif ($t.RepeatTotal -gt 1) {
-                    $phaseStr = "$($t.CurrentRun)/$($t.RepeatTotal)"
-                    $phaseColor = $c.Magenta
-                }
-                else {
-                    $phaseStr = "-"
-                    $phaseColor = $c.Magenta
-                }
-                
-                # Message - for sequences show phase label
-                $msgSource = if ($t.IsSequence) { $t.PhaseLabel } else { $t.Message }
-                $msgDisplay = Get-TruncatedMessage -Message $msgSource -MaxLength 20
-                
-                # Duration - for sequences show total duration
-                if ($t.IsSequence) {
-                    $durationStr = Format-Duration -Seconds $t.TotalSeconds
-                }
-                else {
-                    $durationStr = Format-Duration -Seconds $t.Seconds
-                }
-
-                # Calculate progress percentage
-                $percent = Get-TimerProgress -Timer $t
-                $progressStr = if ($percent -ge 0) { "{0:N0}%" -f $percent } else { "-" }
-
-                # Calculate values based on state
-                if ($t.State -eq 'Running') {
-                    $endsAtStr = $endTime.ToString('HH:mm:ss')
-                }
-                elseif ($t.State -eq 'Paused') {
-                    $pausedRemaining = if ($t.RemainingSeconds) { $t.RemainingSeconds } else { $t.Seconds }
-                    $remainingStr = Format-RemainingTime -Remaining ([TimeSpan]::FromSeconds($pausedRemaining))
-                    $projectedEnd = $now.AddSeconds($pausedRemaining)
-                    $endsAtStr = $projectedEnd.ToString('HH:mm:ss')
-                }
-                else {
-                    $remainingStr = "-"
-                    $endsAtStr = "-"
-                }
-
-                $line = "  $($c.Cyan){0,-$colId}$($c.Reset)${stateColor}{1,-$colState}$($c.Reset)$($c.White){2,-$colDuration}$($c.Reset)$($c.Yellow){3,-$colRemaining}$($c.Reset)$($c.Green){4,-$colProgress}$($c.Reset)$($c.Green){5,-$colEndsAt}$($c.Reset)${phaseColor}{6,-$colPhase}$($c.Reset)$($c.Gray){7}$($c.Reset)" -f $t.Id, $t.State, $durationStr, $remainingStr, $progressStr, $endsAtStr, $phaseStr, $msgDisplay
-                [void]$sb.AppendLine($line)
+                [void]$sb.AppendLine((Get-TimerListWatchRowLine -Timer $t -Now $now -Colors $c -ColWidths $colWidths))
             }
-
             [void]$sb.AppendLine("")
             [void]$sb.AppendLine("$($c.Gray)  Press any key to exit watch mode...$($c.Reset)")
-
-            # Clear and write in one go (minimizes flicker)
             Clear-Host
             [Console]::Write($sb.ToString())
-
-            # Wait remaining time to complete 1 second (compensate for work done)
-            $remainingMs = 1000 - $sw.ElapsedMilliseconds
-            while ($remainingMs -gt 0) {
-                if ([Console]::KeyAvailable) {
-                    [Console]::ReadKey($true) | Out-Null
-                    Write-Host ""
-                    return
-                }
-                $sleepMs = [math]::Min(50, $remainingMs)
-                Start-Sleep -Milliseconds $sleepMs
-                $remainingMs = 1000 - $sw.ElapsedMilliseconds
+            if (Wait-OneSecondOrKeyPress -Stopwatch $sw) {
+                Write-Host ""
+                return
             }
         }
     }
@@ -630,14 +434,14 @@ function TimerPresets {
     .EXAMPLE
         tpre
     #>
-    
+
     # Build options from presets
     $options = @()
     foreach ($name in $script:TimerPresets.Keys | Sort-Object) {
         $preset = $script:TimerPresets[$name]
         $phases = ConvertFrom-TimerSequence -Pattern $preset.Pattern
         $summary = Get-SequenceSummary -Phases $phases
-        
+
         $options += @{
             Id          = $name
             Label       = "$name - $($summary.TotalDuration) total ($($summary.PhaseCount) phases)"
@@ -645,20 +449,20 @@ function TimerPresets {
             Color       = 'White'
         }
     }
-    
+
     # Add custom option
     $options += @{
         Id    = '_custom'
         Label = "[Enter custom sequence...]"
         Color = 'Cyan'
     }
-    
+
     $selectedId = Show-MenuPicker -Title "SELECT TIMER PRESET" -Options $options -AllowCancel
-    
+
     if (-not $selectedId) {
         return
     }
-    
+
     if ($selectedId -eq '_custom') {
         Write-Host ""
         Write-Host "  Enter sequence pattern:" -ForegroundColor Cyan
@@ -691,45 +495,21 @@ function TimerWatch {
     )
 
     $timers = @(Sync-TimerData)
-    $activeTimers = @($timers | Where-Object { $_.State -eq 'Running' })
-
-    if ($activeTimers.Count -eq 0) {
-        Write-Host "`n  No active timers to watch." -ForegroundColor Gray
-        Write-Host "  Use 't <time>' to create one.`n" -ForegroundColor DarkGray
+    $result = Get-TimerForWatch -Timers $timers -Id $Id
+    if ($result.Error) {
+        if ($result.Error -eq 'NoActive') {
+            Write-Host "`n  No active timers to watch." -ForegroundColor Gray
+            Write-Host "  Use 't <time>' to create one.`n" -ForegroundColor DarkGray
+        }
+        elseif ($result.Error -eq 'NotFound') {
+            Write-Host "`n  Timer '$($result.Id)' not found.`n" -ForegroundColor Red
+        }
+        elseif ($result.Error -eq 'NotRunning') {
+            Write-Host "`n  Timer '$($result.Id)' is not running (state: $($result.State)).`n" -ForegroundColor Yellow
+        }
         return
     }
-
-    # Auto-select if only one timer or find by ID
-    $timer = $null
-    if ([string]::IsNullOrEmpty($Id)) {
-        if ($activeTimers.Count -eq 1) {
-            $timer = $activeTimers[0]
-        }
-        else {
-            # Show picker for multiple timers
-            $options = Get-TimerPickerOptions -Timers $activeTimers -FilterState 'Running' -ShowRemaining
-
-            $selectedId = Show-MenuPicker -Title "SELECT TIMER TO WATCH" -Options $options -AllowCancel
-            if (-not $selectedId) {
-                return
-            }
-
-            $timer = $activeTimers | Where-Object { $_.Id -eq $selectedId }
-        }
-    }
-    else {
-        $timer = $timers | Where-Object { $_.Id -eq $Id }
-        if (-not $timer) {
-            Write-Host "`n  Timer '$Id' not found.`n" -ForegroundColor Red
-            return
-        }
-        if ($timer.State -ne 'Running') {
-            Write-Host "`n  Timer '$Id' is not running (state: $($timer.State)).`n" -ForegroundColor Yellow
-            return
-        }
-    }
-
-    Show-TimerWatchDisplay -Timer $timer
+    Show-TimerWatchDisplay -Timer $result.Timer
 }
 
 function Show-TimerWatchDisplay {
@@ -742,13 +522,7 @@ function Show-TimerWatchDisplay {
     #>
     param([PSCustomObject]$Timer)
 
-    # ANSI color codes
     $c = Get-AnsiColors
-
-    # Progress bar characters
-    $barFull = [char]0x2588      # █
-    $barEmpty = [char]0x2591    # ░
-
     [Console]::CursorVisible = $false
 
     # Stopwatch for accurate 1-second ticks
@@ -785,121 +559,26 @@ function Show-TimerWatchDisplay {
             $remainingSeconds = [math]::Max(0, $remaining.TotalSeconds)
             $percent = Get-TimerProgress -Timer $currentTimer
 
-            # Timer completed
             if ($remainingSeconds -le 0) {
                 Clear-Host
-                $sb = [System.Text.StringBuilder]::new()
-                [void]$sb.AppendLine("")
-                [void]$sb.AppendLine("$($c.Green)$($c.Bold)  TIMER COMPLETED!$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Cyan)  ==================$($c.Reset)")
-                [void]$sb.AppendLine("")
-                [void]$sb.AppendLine("$($c.Gray)  Message:  $($c.White)$($Timer.Message)$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Gray)  Duration: $($c.White)$(Format-Duration -Seconds $totalSeconds)$($c.Reset)")
-                [void]$sb.AppendLine("")
-
-                # Full progress bar
-                $barWidth = 40
-                $fullBar = [string]$barFull * $barWidth
-                [void]$sb.AppendLine("  $($c.Green)$fullBar$($c.Reset) $($c.Bold)100%$($c.Reset)")
-                [void]$sb.AppendLine("")
-                [void]$sb.AppendLine("$($c.Green)  Finished at $($endTime.ToString('HH:mm:ss'))$($c.Reset)")
-                [void]$sb.AppendLine("")
-
+                $sb = Get-TimerWatchCompletedContent -Colors $c -Message $Timer.Message -TotalSeconds $totalSeconds -EndTime $endTime
                 [Console]::Write($sb.ToString())
                 break
             }
 
-            # Build display
-            $sb = [System.Text.StringBuilder]::new()
-
-            [void]$sb.AppendLine("")
-            
-            # Different header for sequences
-            if ($currentTimer.IsSequence) {
-                [void]$sb.AppendLine("$($c.Cyan)$($c.Bold)  SEQUENCE WATCH $($c.White)[$($Timer.Id)]$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Cyan)  =====================$($c.Reset)")
-                [void]$sb.AppendLine("")
-                
-                $phaseNum = [int]$currentTimer.CurrentPhase + 1
-                $phaseLabel = $currentTimer.PhaseLabel
-                [void]$sb.AppendLine("$($c.Gray)  Pattern:  $($c.White)$($currentTimer.SequencePattern)$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Gray)  Total:    $($c.White)$(Format-Duration -Seconds $currentTimer.TotalSeconds)$($c.Reset)")
-                [void]$sb.AppendLine("")
-                [void]$sb.AppendLine("$($c.Cyan)$($c.Bold)  Phase $phaseNum/$($currentTimer.TotalPhases): $phaseLabel$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Gray)  Duration: $($c.White)$(Format-Duration -Seconds $currentTimer.Seconds)$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Gray)  Ends at:  $($c.Yellow)$($endTime.ToString('HH:mm:ss'))$($c.Reset)")
+            $endsAtStr = $endTime.ToString('HH:mm:ss')
+            $sb = Get-TimerWatchRunningContent -Colors $c -CurrentTimer $currentTimer -Timer $Timer -Percent $percent -Remaining $remaining -EndsAtFormatted $endsAtStr
+            $phaseSb = Get-TimerWatchPhaseTimelineContent -Colors $c -CurrentTimer $currentTimer
+            if ($phaseSb) {
+                [void]$sb.Append($phaseSb.ToString())
             }
-            else {
-                [void]$sb.AppendLine("$($c.Cyan)$($c.Bold)  TIMER WATCH $($c.White)[$($Timer.Id)]$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Cyan)  ===================$($c.Reset)")
-                [void]$sb.AppendLine("")
-                [void]$sb.AppendLine("$($c.Gray)  Message:  $($c.White)$($Timer.Message)$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Gray)  Duration: $($c.White)$(Format-Duration -Seconds $totalSeconds)$($c.Reset)")
-                [void]$sb.AppendLine("$($c.Gray)  Ends at:  $($c.Yellow)$($endTime.ToString('HH:mm:ss'))$($c.Reset)")
-
-                if ($Timer.RepeatTotal -gt 1) {
-                    [void]$sb.AppendLine("$($c.Gray)  Repeat:   $($c.White)$($currentTimer.CurrentRun)/$($Timer.RepeatTotal)$($c.Reset)")
-                }
-            }
-
-            [void]$sb.AppendLine("")
-
-            # Progress bar (for current phase)
-            $barWidth = 40
-            $filledCount = [int][math]::Floor(($percent / 100) * $barWidth)
-            $emptyCount = [int]($barWidth - $filledCount)
-            $filledBar = [string]$barFull * $filledCount
-            $emptyBar = [string]$barEmpty * $emptyCount
-            $percentStr = $percent.ToString("0.00", [System.Globalization.CultureInfo]::InvariantCulture) + "%"
-
-            [void]$sb.AppendLine("  $($c.Green)$filledBar$($c.Gray)$emptyBar$($c.Reset) $($c.Bold)$percentStr$($c.Reset)")
-            [void]$sb.AppendLine("")
-
-            # Remaining time - large format
-            $remainingStr = Format-RemainingTime -Remaining $remaining
-            [void]$sb.AppendLine("$($c.Yellow)$($c.Bold)  Remaining: $remainingStr$($c.Reset)")
-            
-            # Show phase timeline for sequences
-            if ($currentTimer.IsSequence -and $currentTimer.Phases) {
-                [void]$sb.AppendLine("")
-                [void]$sb.AppendLine("$($c.DarkCyan)  Phases:$($c.Reset)")
-                $phases = $currentTimer.Phases
-                $maxShow = [math]::Min(6, $phases.Count)
-                $startIdx = [math]::Max(0, [int]$currentTimer.CurrentPhase - 2)
-                $endIdx = [math]::Min($phases.Count - 1, $startIdx + $maxShow - 1)
-                
-                for ($i = $startIdx; $i -le $endIdx; $i++) {
-                    $phase = $phases[$i]
-                    $pNum = $i + 1
-                    $marker = if ($i -eq [int]$currentTimer.CurrentPhase) { "$($c.Cyan)>" } else { " " }
-                    $pColor = if ($i -lt [int]$currentTimer.CurrentPhase) { $c.Dim } elseif ($i -eq [int]$currentTimer.CurrentPhase) { $c.White } else { $c.Gray }
-                    $checkMark = if ($i -lt [int]$currentTimer.CurrentPhase) { "$($c.Green)[OK]" } else { "    " }
-                    [void]$sb.AppendLine("  $marker $checkMark ${pColor}$pNum. $($phase.Label) ($(Format-Duration -Seconds $phase.Seconds))$($c.Reset)")
-                }
-                
-                if ($endIdx -lt $phases.Count - 1) {
-                    [void]$sb.AppendLine("$($c.Dim)    ... $($phases.Count - $endIdx - 1) more phases$($c.Reset)")
-                }
-            }
-            
             [void]$sb.AppendLine("")
             [void]$sb.AppendLine("$($c.Dim)  Press any key to exit watch mode...$($c.Reset)")
-
-            # Clear and write
             Clear-Host
             [Console]::Write($sb.ToString())
-
-            # Wait remaining time to complete 1 second (compensate for work done)
-            $remainingMs = 1000 - $sw.ElapsedMilliseconds
-            while ($remainingMs -gt 0) {
-                if ([Console]::KeyAvailable) {
-                    [Console]::ReadKey($true) | Out-Null
-                    Write-Host ""
-                    return
-                }
-                $sleepMs = [math]::Min(50, $remainingMs)
-                Start-Sleep -Milliseconds $sleepMs
-                $remainingMs = 1000 - $sw.ElapsedMilliseconds
+            if (Wait-OneSecondOrKeyPress -Stopwatch $sw) {
+                Write-Host ""
+                return
             }
         }
     }
@@ -924,81 +603,42 @@ function TimerPause {
     )
 
     $timers = @(Get-TimerData)
-
     if ($timers.Count -eq 0) {
         Write-Host "`n  No timers to pause.`n" -ForegroundColor Gray
         return
     }
 
     if ([string]::IsNullOrEmpty($Id)) {
-        # Show picker for running timers
         $runningTimers = @($timers | Where-Object { $_.State -eq 'Running' })
-
         if ($runningTimers.Count -eq 0) {
             Write-Host "`n  No running timers to pause.`n" -ForegroundColor Gray
             return
         }
-
         $options = Get-TimerPickerOptions -Timers $runningTimers -FilterState 'Running' -ShowRemaining -IncludeAllOption -AllOptionLabel "Pause ALL running timers ($($runningTimers.Count) total)" -AllOptionColor 'Yellow'
-
         $selectedId = Show-MenuPicker -Title "SELECT TIMER TO PAUSE" -Options $options -AllowCancel
-        if (-not $selectedId) {
-            return
-        }
-
+        if (-not $selectedId) { return }
         $Id = $selectedId
         $timers = @(Get-TimerData)
     }
 
     if ($Id -eq 'all') {
-        # Pause all timers
-        $count = 0
-        foreach ($t in $timers) {
-            if ($t.State -ne 'Running') { continue }
-
-            # Stop the scheduled task
-            Stop-TimerTask -TimerId $t.Id
-
-            # Save remaining seconds for resume
-            $endTime = [DateTime]::Parse($t.EndTime)
-            $remaining = [int]($endTime - (Get-Date)).TotalSeconds
-            if ($remaining -lt 0) { $remaining = 0 }
-            $t | Add-Member -NotePropertyName 'RemainingSeconds' -NotePropertyValue $remaining -Force
-            $t.State = 'Paused'
-            $count++
-        }
-        Save-TimerData -Timers $timers
+        $count = Invoke-PauseTimersBulk -Timers $timers
         Write-Host "`n  Paused $count timer(s).`n" -ForegroundColor Yellow
     }
     else {
-        # Pause specific timer
-        $timer = $timers | Where-Object { $_.Id -eq $Id }
-
-        if (-not $timer) {
+        $remaining = Invoke-PauseSingleTimer -Timers $timers -Id $Id
+        if ($remaining -eq $false) {
             Write-Host "`n  Timer '$Id' not found.`n" -ForegroundColor Red
-            return
         }
-
-        if ($timer.State -ne 'Running') {
+        elseif ($null -eq $remaining) {
             Write-Host "`n  Timer '$Id' is not running.`n" -ForegroundColor Yellow
-            return
         }
-
-        # Stop the scheduled task
-        Stop-TimerTask -TimerId $Id
-
-        # Save remaining seconds for resume
-        $endTime = [DateTime]::Parse($timer.EndTime)
-        $remaining = [int]($endTime - (Get-Date)).TotalSeconds
-        if ($remaining -lt 0) { $remaining = 0 }
-        $timer | Add-Member -NotePropertyName 'RemainingSeconds' -NotePropertyValue $remaining -Force
-        $timer.State = 'Paused'
-        Save-TimerData -Timers $timers
-
-        Write-Host "`n  Timer " -ForegroundColor Yellow -NoNewline
-        Write-Host "[$Id]" -ForegroundColor Cyan -NoNewline
-        Write-Host " paused. " -ForegroundColor Yellow -NoNewline
-        Write-Host "($(Format-Duration -Seconds $remaining) remaining)`n" -ForegroundColor Gray
+        else {
+            Write-Host "`n  Timer " -ForegroundColor Yellow -NoNewline
+            Write-Host "[$Id]" -ForegroundColor Cyan -NoNewline
+            Write-Host " paused. " -ForegroundColor Yellow -NoNewline
+            Write-Host "($(Format-Duration -Seconds $remaining) remaining)`n" -ForegroundColor Gray
+        }
     }
 }
 
@@ -1021,126 +661,46 @@ function TimerResume {
     )
 
     $timers = @(Get-TimerData)
-
     if ($timers.Count -eq 0) {
         Write-Host "`n  No timers to resume.`n" -ForegroundColor Gray
         return
     }
 
     if ([string]::IsNullOrEmpty($Id)) {
-        # Show picker for paused and lost timers
         $resumableTimers = @($timers | Where-Object { $_.State -eq 'Paused' -or $_.State -eq 'Lost' })
-
         if ($resumableTimers.Count -eq 0) {
             Write-Host "`n  No paused or lost timers to resume.`n" -ForegroundColor Gray
             return
         }
-
         $options = Get-TimerPickerOptions -Timers $resumableTimers -ShowRemaining -IncludeAllOption -AllOptionLabel "Resume ALL resumable timers ($($resumableTimers.Count) total)" -AllOptionColor 'Green'
-
         $selectedId = Show-MenuPicker -Title "SELECT TIMER TO RESUME" -Options $options -AllowCancel
-        if (-not $selectedId) {
-            return
-        }
-
+        if (-not $selectedId) { return }
         $Id = $selectedId
         $timers = @(Get-TimerData)
     }
 
     if ($Id -eq 'all') {
-        # Resume all paused and lost timers
-        $count = 0
-        foreach ($t in $timers) {
-            if ($t.State -ne 'Paused' -and $t.State -ne 'Lost') { continue }
-
-            # Use saved remaining time if available, otherwise full duration
-            $seconds = if ($t.RemainingSeconds -and $t.RemainingSeconds -gt 0) {
-                $t.RemainingSeconds
-            } else {
-                $t.Seconds
-            }
-
-            if ($seconds -le 0) {
-                $t.State = 'Completed'
-                continue
-            }
-
-            # Update times
-            $now = Get-Date
-            $t.StartTime = $now.ToString('o')
-            $t.EndTime = $now.AddSeconds($seconds).ToString('o')
-            $t.State = 'Running'
-            $t | Add-Member -NotePropertyName 'RemainingSeconds' -NotePropertyValue $null -Force
-
-            # Start the job with full timer info for notifications
-            Start-TimerJob -Timer ([PSCustomObject]@{
-                Id          = $t.Id
-                Seconds     = $seconds
-                Message     = $t.Message
-                Duration    = Format-Duration -Seconds $t.Seconds
-                StartTime   = $t.StartTime
-                RepeatTotal = $t.RepeatTotal
-                CurrentRun  = $t.CurrentRun
-            })
-            $count++
-        }
-        Save-TimerData -Timers $timers
+        $count = Invoke-ResumeTimersBulk -Timers $timers
         Write-Host "`n  Resumed $count timer(s).`n" -ForegroundColor Green
     }
     else {
-        # Resume specific timer
-        $timer = $timers | Where-Object { $_.Id -eq $Id }
-
-        if (-not $timer) {
+        $result = Invoke-ResumeSingleTimer -Timers $timers -Id $Id
+        if (-not $result.Found) {
             Write-Host "`n  Timer '$Id' not found.`n" -ForegroundColor Red
-            return
         }
-
-        if ($timer.State -ne 'Paused' -and $timer.State -ne 'Lost') {
-            Write-Host "`n  Timer '$Id' cannot be resumed (state: $($timer.State)).`n" -ForegroundColor Yellow
-            return
-        }
-
-        # Use saved remaining time if available, otherwise full duration
-        $isLost = $timer.State -eq 'Lost'
-        $seconds = if ($timer.RemainingSeconds -and $timer.RemainingSeconds -gt 0) {
-            $timer.RemainingSeconds
-        } else {
-            $timer.Seconds
-        }
-
-        if ($seconds -le 0) {
-            $timer.State = 'Completed'
-            Save-TimerData -Timers $timers
+        elseif ($result.NoTime) {
             Write-Host "`n  Timer '$Id' has no time remaining.`n" -ForegroundColor Yellow
-            return
         }
-
-        # Update times
-        $now = Get-Date
-        $newEndTime = $now.AddSeconds($seconds)
-        $timer.StartTime = $now.ToString('o')
-        $timer.EndTime = $newEndTime.ToString('o')
-        $timer.State = 'Running'
-        $timer | Add-Member -NotePropertyName 'RemainingSeconds' -NotePropertyValue $null -Force
-
-        # Start the job with full timer info for notifications
-        Start-TimerJob -Timer ([PSCustomObject]@{
-            Id          = $timer.Id
-            Seconds     = $seconds
-            Message     = $timer.Message
-            Duration    = Format-Duration -Seconds $timer.Seconds
-            StartTime   = $timer.StartTime
-            RepeatTotal = $timer.RepeatTotal
-            CurrentRun  = $timer.CurrentRun
-        })
-        Save-TimerData -Timers $timers
-
-        $action = if ($isLost) { "restarted" } else { "resumed" }
-        Write-Host "`n  Timer " -ForegroundColor Green -NoNewline
-        Write-Host "[$Id]" -ForegroundColor Cyan -NoNewline
-        Write-Host " $action. " -ForegroundColor Green -NoNewline
-        Write-Host "Ends at $($newEndTime.ToString('HH:mm:ss'))`n" -ForegroundColor Yellow
+        elseif (-not $result.CanResume) {
+            Write-Host "`n  Timer '$Id' cannot be resumed.`n" -ForegroundColor Yellow
+        }
+        else {
+            $action = if ($result.IsLost) { "restarted" } else { "resumed" }
+            Write-Host "`n  Timer " -ForegroundColor Green -NoNewline
+            Write-Host "[$Id]" -ForegroundColor Cyan -NoNewline
+            Write-Host " $action. " -ForegroundColor Green -NoNewline
+            Write-Host "Ends at $($result.NewEndTime.ToString('HH:mm:ss'))`n" -ForegroundColor Yellow
+        }
     }
 }
 
@@ -1160,88 +720,45 @@ function TimerRemove {
     )
 
     $timers = @(Get-TimerData)
-
     if ($timers.Count -eq 0) {
         Write-Host "`n  No timers to remove.`n" -ForegroundColor Gray
         return
     }
 
     if ([string]::IsNullOrEmpty($Id)) {
-        # Sync first to get current states
         $timers = @(Sync-TimerData)
-
         if ($timers.Count -eq 0) {
             Write-Host "`n  No timers to remove.`n" -ForegroundColor Gray
             return
         }
-
-        # Build options with done and all actions
         $options = Get-TimerPickerOptions -Timers $timers -IncludeDoneOption -IncludeAllOption -AllOptionLabel "Remove ALL timers ($($timers.Count) total)" -AllOptionColor 'Red'
-
-        # Force add "all" option even if only 1 timer (override the count check)
         if ($timers.Count -eq 1) {
-            $options += @{
-                Id    = 'all'
-                Label = "Remove ALL timers ($($timers.Count) total)"
-                Color = 'Red'
-            }
+            $options += @{ Id = 'all'; Label = "Remove ALL timers ($($timers.Count) total)"; Color = 'Red' }
         }
-
         $selectedId = Show-MenuPicker -Title "SELECT TIMER TO REMOVE" -Options $options -AllowCancel
-        if (-not $selectedId) {
-            return
-        }
-
+        if (-not $selectedId) { return }
         $Id = $selectedId
-        # Re-fetch timers in case state changed
         $timers = @(Get-TimerData)
     }
 
     if ($Id -eq 'all') {
-        # Stop and remove all
-        foreach ($t in $timers) {
-            Stop-TimerTask -TimerId $t.Id
-        }
-        Save-TimerData -Timers @()
+        Invoke-RemoveTimersBulk -Timers $timers -Mode 'all' | Out-Null
         Write-Host "`n  All timers removed.`n" -ForegroundColor Yellow
     }
     elseif ($Id -eq 'done') {
-        # Remove only completed/lost (preserve stopped/paused)
-        $toKeep = @()
-        $removed = 0
-
-        foreach ($t in $timers) {
-            if ($t.State -eq 'Completed' -or $t.State -eq 'Lost') {
-                Stop-TimerTask -TimerId $t.Id
-                $removed++
-            }
-            else {
-                $toKeep += $t
-            }
-        }
-
-        Save-TimerData -Timers $toKeep
+        $removed = Invoke-RemoveTimersBulk -Timers $timers -Mode 'done'
         Write-Host "`n  Removed $removed finished timer(s).`n" -ForegroundColor Yellow
     }
     else {
-        # Remove specific timer
-        $timer = $timers | Where-Object { $_.Id -eq $Id }
-
-        if (-not $timer) {
+        $removed = Invoke-RemoveSingleTimer -Timers $timers -Id $Id
+        if (-not $removed) {
             Write-Host "`n  Timer '$Id' not found.`n" -ForegroundColor Red
-            return
         }
-
-        # Stop scheduled task if running
-        Stop-TimerTask -TimerId $Id
-
-        # Remove from list
-        $timers = @($timers | Where-Object { $_.Id -ne $Id })
-        Save-TimerData -Timers $timers
-
-        Write-Host "`n  Timer " -ForegroundColor Yellow -NoNewline
-        Write-Host "[$Id]" -ForegroundColor Cyan -NoNewline
-        Write-Host " removed.`n" -ForegroundColor Yellow
+        else {
+            Write-Host "`n  Timer " -ForegroundColor Yellow -NoNewline
+            Write-Host "[$Id]" -ForegroundColor Cyan -NoNewline
+            Write-Host " removed.`n" -ForegroundColor Yellow
+        }
     }
 }
 

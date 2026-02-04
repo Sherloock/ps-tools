@@ -582,3 +582,321 @@ function Stop-TimerTask {
     $scriptPath = Join-Path $env:TEMP "PSTimer_$TimerId.ps1"
     Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
 }
+
+# ============================================================================
+# DUPLICATE DETECTION HELPERS
+# ============================================================================
+
+function Get-LinkType {
+    <#
+    .SYNOPSIS
+        Determines the relationship between two files.
+    .DESCRIPTION
+        Returns whether two files are duplicates, hard links, or symlinks.
+    .PARAMETER Path1
+        First file path.
+    .PARAMETER Path2
+        Second file path.
+    .RETURNS
+        String: "DUPE", "HARDLINK", or "SYMLINK"
+    #>
+    param(
+        [string]$Path1,
+        [string]$Path2
+    )
+
+    try {
+        $item1 = Get-Item -LiteralPath $Path1 -ErrorAction Stop
+        $item2 = Get-Item -LiteralPath $Path2 -ErrorAction Stop
+
+        # Check if either is a symlink/junction
+        $isSymlink1 = ($item1.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq [System.IO.FileAttributes]::ReparsePoint
+        $isSymlink2 = ($item2.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq [System.IO.FileAttributes]::ReparsePoint
+
+        if ($isSymlink1 -or $isSymlink2) {
+            return "SYMLINK"
+        }
+
+        # Check if hard links using fsutil
+        $fsutilOutput = & cmd /c "fsutil hardlink list `"$Path1`" 2>nul"
+        if ($LASTEXITCODE -eq 0 -and $fsutilOutput) {
+            # Normalize Path2 for comparison
+            $normalizedPath2 = (Resolve-Path -LiteralPath $Path2).Path.ToLower().TrimEnd('\')
+            
+            # Check each line from fsutil output
+            foreach ($line in $fsutilOutput) {
+                $trimmedLine = $line.Trim()
+                if ($trimmedLine) {
+                    # fsutil returns paths relative to drive root (e.g., \downloads\file.mkv)
+                    # Convert to full path
+                    $drive = Split-Path -Qualifier $Path1
+                    $fullPath = Join-Path $drive $trimmedLine
+                    
+                    try {
+                        $resolvedPath = (Resolve-Path -LiteralPath $fullPath -ErrorAction SilentlyContinue).Path.ToLower().TrimEnd('\')
+                        if ($resolvedPath -eq $normalizedPath2) {
+                            return "HARDLINK"
+                        }
+                    } catch {}
+                }
+            }
+        }
+
+        # Default: actual duplicate (different files with same content)
+        return "DUPE"
+    }
+    catch {
+        # If we can't determine, assume it's a duplicate
+        return "DUPE"
+    }
+}
+
+function Get-FileHashPartial {
+    <#
+    .SYNOPSIS
+        Computes hash of first and last N bytes of a file for quick comparison.
+    .PARAMETER FilePath
+        Path to the file.
+    .PARAMETER BytesToRead
+        Number of bytes to read from start and end (default: 64KB).
+    #>
+    param(
+        [string]$FilePath,
+        [long]$BytesToRead = 64KB
+    )
+
+    try {
+        $fileSize = (Get-Item -LiteralPath $FilePath).Length
+        if ($fileSize -eq 0) { return $null }
+
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $stream = [System.IO.File]::OpenRead($FilePath)
+
+        try {
+            # Read first N bytes - cast BytesToRead to long to handle large files
+            $firstBytes = New-Object byte[] ([Math]::Min([long]$BytesToRead, $fileSize))
+            $stream.Read($firstBytes, 0, $firstBytes.Length) | Out-Null
+            $sha256.TransformBlock($firstBytes, 0, $firstBytes.Length, $firstBytes, 0) | Out-Null
+
+            # Read last N bytes if file is larger than BytesToRead
+            if ($fileSize -gt $BytesToRead) {
+                $stream.Seek([Math]::Max([long]0, $fileSize - $BytesToRead), [System.IO.SeekOrigin]::Begin) | Out-Null
+                $lastBytes = New-Object byte[] ([Math]::Min([long]$BytesToRead, $fileSize - $BytesToRead))
+                $stream.Read($lastBytes, 0, $lastBytes.Length) | Out-Null
+                $sha256.TransformFinalBlock($lastBytes, 0, $lastBytes.Length) | Out-Null
+            } else {
+                $sha256.TransformFinalBlock(@(), 0, 0) | Out-Null
+            }
+
+            return [BitConverter]::ToString($sha256.Hash).Replace("-", "").ToLower()
+        }
+        finally {
+            $stream.Close()
+            $sha256.Dispose()
+        }
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-FilesFromPath {
+    <#
+    .SYNOPSIS
+        Gets all files from a path recursively with size filtering.
+    .PARAMETER Path
+        Root path to scan.
+    .PARAMETER MinSizeBytes
+        Minimum file size in bytes (default: 100MB).
+    #>
+    param(
+        [string]$Path,
+        [long]$MinSizeBytes = 100MB
+    )
+
+    if (-not (Test-Path $Path)) {
+        return @()
+    }
+
+    return Get-ChildItem -LiteralPath $Path -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Length -ge $MinSizeBytes } |
+        Select-Object FullName, Name, Length, @{N="RelativePath"; E={ $_.FullName.Substring($Path.Length).TrimStart("\") }}
+}
+
+function Find-DuplicateFiles {
+    <#
+    .SYNOPSIS
+        Finds duplicate files between downloads folder and media folders.
+    .PARAMETER DownloadsPath
+        Path to downloads folder.
+    .PARAMETER MediaPaths
+        Array of media folder paths.
+    .PARAMETER MinSizeBytes
+        Minimum file size to check (default: 100MB).
+    #>
+    param(
+        [string]$DownloadsPath,
+        [array]$MediaPaths,
+        [long]$MinSizeBytes = 100MB
+    )
+
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host "  Scanning for duplicates..." -ForegroundColor Cyan
+    Write-Host "  Minimum file size: $(Get-ReadableSize -Bytes $MinSizeBytes)" -ForegroundColor Gray
+
+    $duplicates = @()
+
+    # Build index of all media files by size
+    Write-Host "  Indexing media libraries..." -ForegroundColor Gray
+    $mediaFilesBySize = @{}
+    $totalMediaFiles = 0
+
+    foreach ($mediaPath in $MediaPaths) {
+        if (-not (Test-Path $mediaPath)) {
+            Write-Host "    Skipping missing path: $mediaPath" -ForegroundColor DarkGray
+            continue
+        }
+
+        $files = Get-ChildItem -LiteralPath $mediaPath -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Length -ge $MinSizeBytes }
+
+        foreach ($file in $files) {
+            $size = $file.Length
+            if (-not $mediaFilesBySize.ContainsKey($size)) {
+                $mediaFilesBySize[$size] = @()
+            }
+            $mediaFilesBySize[$size] += $file
+            $totalMediaFiles++
+        }
+    }
+
+    Write-Host "    Indexed $totalMediaFiles media files." -ForegroundColor Gray
+
+    # Get downloads files
+    $downloadsFiles = @(Get-FilesFromPath -Path $DownloadsPath -MinSizeBytes $MinSizeBytes)
+
+    if ($downloadsFiles.Count -eq 0) {
+        Write-Host "  No files found in downloads folder (>= $(Get-ReadableSize -Bytes $MinSizeBytes))." -ForegroundColor Yellow
+        return $duplicates
+    }
+
+    Write-Host "  Found $($downloadsFiles.Count) files in downloads." -ForegroundColor Gray
+
+    # Find duplicates by checking downloads against media index
+    $checkedCount = 0
+    $hashMatchCount = 0
+
+    foreach ($dlFile in $downloadsFiles) {
+        $size = $dlFile.Length
+
+        # Check if any media files have the same size
+        if ($mediaFilesBySize.ContainsKey($size)) {
+            $candidates = $mediaFilesBySize[$size]
+
+            foreach ($mediaFile in $candidates) {
+                $checkedCount++
+
+                # Compare partial hash
+                $dlHash = Get-FileHashPartial -FilePath $dlFile.FullName
+                $mediaHash = Get-FileHashPartial -FilePath $mediaFile.FullName
+
+                if ($dlHash -and $mediaHash -and $dlHash -eq $mediaHash) {
+                    $hashMatchCount++
+                    $linkType = Get-LinkType -Path1 $dlFile.FullName -Path2 $mediaFile.FullName
+                    $duplicates += [PSCustomObject]@{
+                        DownloadFile = $dlFile.FullName
+                        DownloadSize = $dlFile.Length
+                        MediaFile    = $mediaFile.FullName
+                        MediaSize    = $mediaFile.Length
+                        Hash         = $dlHash
+                        Type         = $linkType
+                    }
+                    $typeColor = switch ($linkType) {
+                        "HARDLINK" { "Green" }
+                        "SYMLINK"  { "Cyan" }
+                        default    { "Green" }
+                    }
+                    Write-Host "    Found $linkType`: $($dlFile.Name)" -ForegroundColor $typeColor
+                }
+
+                if ($checkedCount % 100 -eq 0) {
+                    Write-Host "    Checked $checkedCount potential matches..." -ForegroundColor DarkGray
+                }
+            }
+        }
+    }
+
+    Write-Host "  Checked $checkedCount size matches, found $hashMatchCount hash duplicates." -ForegroundColor Gray
+    return $duplicates
+}
+
+function Write-DuplicateReport {
+    <#
+    .SYNOPSIS
+        Displays a formatted report of duplicate files.
+    .PARAMETER Duplicates
+        Array of duplicate file objects.
+    #>
+    param([array]$Duplicates)
+
+    Write-Host "" -ForegroundColor Cyan
+    Write-Host $("=" * 60) -ForegroundColor Cyan
+    Write-Host "  DUPLICATE FILES REPORT" -ForegroundColor Cyan
+    Write-Host $("=" * 60) -ForegroundColor Cyan
+
+    if (-not $Duplicates -or $Duplicates.Count -eq 0) {
+        Write-Host "  No duplicates found!" -ForegroundColor Green
+        Write-Host "" -ForegroundColor Cyan
+        return
+    }
+
+    Write-Host "  Found $($Duplicates.Count) duplicate file(s):" -ForegroundColor Yellow
+    Write-Host "" -ForegroundColor Cyan
+
+    $totalWastedSpace = 0
+    $counts = @{
+        DUPE = 0
+        HARDLINK = 0
+        SYMLINK = 0
+    }
+
+    foreach ($dup in $Duplicates) {
+        $sizeStr = Get-ReadableSize -Bytes $dup.DownloadSize
+        $type = if ($dup.Type) { $dup.Type } else { "DUPE" }
+        $counts[$type]++
+
+        # Only count wasted space for actual duplicates
+        if ($type -eq "DUPE") {
+            $totalWastedSpace += $dup.DownloadSize
+        }
+
+        # Set color based on type
+        $tagColor = switch ($type) {
+            "HARDLINK" { "Green" }
+            "SYMLINK"  { "Cyan" }
+            default    { "Red" }
+        }
+
+        Write-Host "  [$type]" -ForegroundColor $tagColor -NoNewline
+        Write-Host " $sizeStr" -ForegroundColor Yellow
+        Write-Host "    Downloads: " -ForegroundColor DarkGray -NoNewline
+        Write-Host $dup.DownloadFile -ForegroundColor Gray
+        Write-Host "    Media:     " -ForegroundColor DarkGray -NoNewline
+        Write-Host $dup.MediaFile -ForegroundColor Gray
+        Write-Host "    Hash:      " -ForegroundColor DarkGray -NoNewline
+        Write-Host $dup.Hash.Substring(0, [Math]::Min(16, $dup.Hash.Length))"..." -ForegroundColor DarkGray
+        Write-Host "" -ForegroundColor Cyan
+    }
+
+    Write-Host $("-" * 60) -ForegroundColor DarkGray
+    Write-Host "  Total items:         " -ForegroundColor Cyan -NoNewline
+    Write-Host $Duplicates.Count -ForegroundColor Yellow
+    Write-Host "  Duplicates:          " -ForegroundColor Cyan -NoNewline
+    Write-Host "$($counts.DUPE) ($(Get-ReadableSize -Bytes $totalWastedSpace) wasted)" -ForegroundColor Red
+    Write-Host "  Hard links:          " -ForegroundColor Cyan -NoNewline
+    Write-Host "$($counts.HARDLINK) (already optimized)" -ForegroundColor Green
+    Write-Host "  Symlinks:            " -ForegroundColor Cyan -NoNewline
+    Write-Host $counts.SYMLINK -ForegroundColor Cyan
+    Write-Host $("=" * 60) -ForegroundColor Cyan
+    Write-Host ""
+}

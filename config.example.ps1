@@ -8,6 +8,12 @@ $global:Config = @{
         "D:\shows"
     )
 
+    # Downloads path for duplicate checking (set to $null to disable)
+    DownloadsPath = "D:\downloads"
+
+    # Minimum file size for duplicate checking (files smaller than this are ignored)
+    DuplicateCheckMinSize = 100MB
+
     # Size function defaults
     SizeDefaults = @{
         Depth   = 0       # 0 = current folder only
