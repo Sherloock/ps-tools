@@ -153,7 +153,14 @@ function Write-SizeTable {
             foreach ($item in $group.Items) {
                 $sizeColor = Get-SizeColor -Bytes $item.RawSize
                 Write-Host ("{0,$sizeWidth}    " -f $item.Size) -NoNewline -ForegroundColor $sizeColor
-                Write-Host $item.Name -ForegroundColor Gray
+                
+                # Check if name has episode count
+                if ($item.Name -match '^(.*)\s+(\[\d+ episodes\])$') {
+                    Write-Host $matches[1] -NoNewline -ForegroundColor Gray
+                    Write-Host " $($matches[2])" -ForegroundColor Cyan
+                } else {
+                    Write-Host $item.Name -ForegroundColor Gray
+                }
             }
         }
 
@@ -171,7 +178,14 @@ function Write-SizeTable {
             $calcTotal += $item.RawSize
             $sizeColor = Get-SizeColor -Bytes $item.RawSize
             Write-Host ("{0,$sizeWidth}  " -f $item.Size) -NoNewline -ForegroundColor $sizeColor
-            Write-Host $item.Name -ForegroundColor Gray
+            
+            # Check if name has episode count
+            if ($item.Name -match '^(.*)\s+(\[\d+ episodes\])$') {
+                Write-Host $matches[1] -NoNewline -ForegroundColor Gray
+                Write-Host " $($matches[2])" -ForegroundColor Cyan
+            } else {
+                Write-Host $item.Name -ForegroundColor Gray
+            }
         }
 
         $finalTotal = if ($TotalBytes -gt 0) { $TotalBytes } else { $calcTotal }
